@@ -78,6 +78,7 @@ pub struct Tree {
     pub labels_num: usize,
     pub pull_mode: bool,
     pub search_mode: SearchMode,
+    pub deadlock: crate::deadlock::state::DeadlockState,
     width: usize,
     height: usize,
 }
@@ -112,6 +113,7 @@ impl Tree {
             labels_num: 0,
             pull_mode: false,
             search_mode: SearchMode::Normal,
+            deadlock: crate::deadlock::state::DeadlockState::default(),
             width,
             height,
         })
@@ -119,6 +121,12 @@ impl Tree {
 
     pub fn new_with_level(log_max_nodes: u32, level: &crate::level::Level) -> Result<Self> {
         Self::new(log_max_nodes, level.initial.width(), level.initial.height())
+    }
+
+    /// Builds the per-level deadlock tables (MPDB2, rooms) before searching.
+    pub fn prepare_deadlock(&mut self, ctx: &LevelContext) -> Result<()> {
+        self.deadlock = crate::deadlock::state::DeadlockState::prepare(ctx)?;
+        Ok(())
     }
 
     pub fn reset(&mut self) {
@@ -304,6 +312,7 @@ impl Tree {
             self.pull_mode,
             self.search_mode,
             helper,
+            &mut self.deadlock,
         )?;
 
         if moves.len() > MAX_MOVES || moves.len() > u16::MAX as usize {
@@ -820,6 +829,89 @@ impl Tree {
         self.nodes[place as usize].deadlocked = true;
         self.move_hashes[index].deadlocked = true;
         self.set_deadlock_status(expansion, ctx);
+        Ok(())
+    }
+
+    /// Port of `set_subtree_as_deadlocked` (`tree.cpp`).
+    pub fn set_subtree_as_deadlocked(
+        &mut self,
+        ctx: &LevelContext,
+        expansion: ExpansionId,
+    ) -> Result<()> {
+        let node = self.expansions[expansion as usize].node;
+        if self.nodes[node as usize].deadlocked {
+            return Ok(());
+        }
+        self.nodes[node as usize].deadlocked = true;
+
+        let (start, count) = {
+            let e = &self.expansions[expansion as usize];
+            (e.move_hash_place, e.moves_num as usize)
+        };
+        for i in 0..count {
+            self.move_hashes[start + i].deadlocked = true;
+            let hash = self.move_hashes[start + i].hash;
+            let place = self
+                .find_node_by_hash(hash)
+                .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+            if self.nodes[place as usize].expansion == NONE_EXPANSION {
+                self.nodes[place as usize].deadlocked = true;
+            } else {
+                let child = self.nodes[place as usize].expansion;
+                self.set_subtree_as_deadlocked(ctx, child)?;
+            }
+        }
+
+        self.nodes[node as usize].deadlocked = false;
+        self.set_deadlock_status(expansion, ctx);
+        debug_assert!(self.nodes[node as usize].deadlocked, "subtree deadlock bug");
+        Ok(())
+    }
+
+    /// Port of `learn_from_subtrees` (`stuck.cpp`).
+    pub fn learn_from_subtrees(
+        &mut self,
+        ctx: &LevelContext,
+        mut expansion: ExpansionId,
+    ) -> Result<()> {
+        let pull_mode = self.pull_mode;
+        while expansion != NONE_EXPANSION {
+            let e = self.expansions[expansion as usize];
+            if e.subtree_size == 64 + 64 * pull_mode as u32 {
+                let board = self.expansion_board(expansion)?;
+                crate::deadlock::stuck::slow_xy_deadlock(
+                    ctx,
+                    &mut self.deadlock,
+                    &board,
+                    pull_mode,
+                )?;
+            }
+            expansion = e.father;
+        }
+        Ok(())
+    }
+
+    /// Port of `recheck_tree_with_patterns` (`stuck.cpp`).
+    pub fn recheck_tree_with_patterns(&mut self, ctx: &LevelContext) -> Result<()> {
+        let mut matches = Vec::new();
+        for i in 0..self.expansions.len() {
+            let node = self.expansions[i].node;
+            if self.nodes[node as usize].deadlocked {
+                continue;
+            }
+            let board = self.expansion_board(i as u32)?;
+            if crate::deadlock::stuck::tree_board_matches_patterns(
+                ctx,
+                &self.deadlock,
+                &board,
+                self.pull_mode,
+            ) {
+                matches.push(i as u32);
+            }
+        }
+        for expansion in matches {
+            self.set_subtree_as_deadlocked(ctx, expansion)?;
+        }
         Ok(())
     }
 

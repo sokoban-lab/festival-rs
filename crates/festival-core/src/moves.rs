@@ -6,9 +6,17 @@
 use crate::bfs;
 use crate::board::Board;
 use crate::constants::*;
+use crate::deadlock::corral::detect_corral;
+use crate::deadlock::corral_search::check_for_deadlock_zone_moves_at;
 use crate::deadlock::direction::deadlock_in_direction;
 use crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls;
-use crate::deadlock::oracle::DeadlockOracle;
+use crate::deadlock::k_dist::check_for_k_dist_moves;
+use crate::deadlock::oracle::check_deadlock_in_moves;
+use crate::deadlock::rooms::reduce_moves_in_rooms_deadlock_search;
+use crate::deadlock::state::DeadlockState;
+use crate::deadlock::wobblers::reduce_moves_in_wobblers_search;
+use crate::deadlock::xy::reduce_moves_in_xy_search;
+use crate::deadlock::zone::update_deadlock_zone;
 use crate::error::{Result, SolveError};
 use crate::graph::Graph;
 use crate::level::Level;
@@ -78,23 +86,62 @@ pub fn box_can_be_moved(
     false
 }
 
-/// Port of `find_possible_moves`. `has_corral` is always false in Phase 2
-/// because corral detection belongs to the deadlock subsystem.
+fn detect_kill_moves(
+    ctx: &LevelContext,
+    deadlock: &DeadlockState,
+    board_in: &Board,
+    board: &Board,
+    moves: &mut Vec<Move>,
+    search_mode: SearchMode,
+    helper: &crate::search::helper::Helper,
+) -> usize {
+    let mut moves_num = moves.len();
+    let mut slice = std::mem::take(moves);
+
+    if search_mode == SearchMode::DeadlockSearch {
+        moves_num = check_for_deadlock_zone_moves_at(ctx, board_in, &mut slice, moves_num);
+    }
+    if search_mode == SearchMode::KDistSearch {
+        moves_num = check_for_k_dist_moves(ctx, board, &mut slice, moves_num, helper.k_dist_value);
+    }
+    if search_mode == SearchMode::WobblersSearch {
+        moves_num = reduce_moves_in_wobblers_search(ctx, &mut slice, moves_num);
+    }
+    if search_mode == SearchMode::RoomsDeadlockSearch {
+        moves_num = reduce_moves_in_rooms_deadlock_search(
+            ctx,
+            deadlock,
+            &mut slice,
+            moves_num,
+            helper.tested_deadlock_room,
+        );
+    }
+    if search_mode == SearchMode::XySearch {
+        moves_num = reduce_moves_in_xy_search(ctx, board, &mut slice, moves_num);
+    }
+
+    slice.truncate(moves_num);
+    *moves = slice;
+    moves_num
+}
+
+/// Port of `find_possible_moves`.
 pub fn find_possible_moves(
     ctx: &LevelContext,
     board_in: &Board,
     pull_mode: bool,
     search_mode: SearchMode,
-    _helper: &mut crate::search::helper::Helper,
+    helper: &mut crate::search::helper::Helper,
+    deadlock: &mut DeadlockState,
 ) -> Result<(Vec<Move>, bool)> {
     let level = &ctx.level;
 
-    let mut cleaned = *board_in;
-    cleaned.clear_deadlock_zone_inplace();
+    let mut b = *board_in;
+    b.clear_deadlock_zone_inplace();
     let board = if pull_mode {
-        cleaned
+        b
     } else {
-        turn_fixed_boxes_into_walls(level, &ctx.distances, &cleaned, &ctx.envelopes)
+        turn_fixed_boxes_into_walls(level, &ctx.distances, &b, &deadlock.envelopes)
     };
 
     let mut possible = Board::new(board.width(), board.height())?;
@@ -109,12 +156,42 @@ pub fn find_possible_moves(
         possible = bfs::get_srcs_of_all_targets(level, &board);
     }
 
+    let mut use_corral = !matches!(
+        search_mode,
+        SearchMode::DeadlockSearch
+            | SearchMode::RoomsDeadlockSearch
+            | SearchMode::MiniSearch
+            | SearchMode::XySearch
+            | SearchMode::KDistSearch
+    );
+    let mut effective_mode = search_mode;
+    if search_mode == SearchMode::IgnoreCorral {
+        use_corral = false;
+        effective_mode = SearchMode::Normal;
+    }
+    if helper.perimeter_found || helper.enable_inefficient_moves {
+        use_corral = false;
+    }
+
+    let mut has_corral = false;
+    let mut corral_options = *board_in;
+    if use_corral && !pull_mode {
+        if let Some(options) = detect_corral(level, &ctx.distances, &board) {
+            has_corral = true;
+            corral_options = options;
+        }
+    }
+
     let mut graph = Graph::new(level);
     let mut scratch = vec![Move::default(); MAX_MOVES];
     let mut moves: Vec<Move> = Vec::new();
 
     for index in 0..level.index_num() {
         let (y, x) = level.coord(index);
+
+        if has_corral && corral_options.cell(y, x) & BOX == 0 {
+            continue;
+        }
         if board.cell(y, x) & BOX == 0 {
             continue;
         }
@@ -132,7 +209,10 @@ pub fn find_possible_moves(
             ctx.distances.impossible_slice(),
         );
         graph.mark_box_moves_in_graph(level, &board, index, pull_mode);
-        if matches!(search_mode, SearchMode::Normal | SearchMode::WobblersSearch) {
+        if matches!(
+            effective_mode,
+            SearchMode::Normal | SearchMode::WobblersSearch
+        ) {
             graph.find_reversible_moves(level, &board, index, pull_mode);
         }
 
@@ -141,12 +221,15 @@ pub fn find_possible_moves(
             mv.pull = pull_mode;
         }
 
-        let valid = DeadlockOracle::new(level).check_deadlock_in_moves(
-            &ctx.distances,
+        let valid = check_deadlock_in_moves(
+            ctx,
+            deadlock,
             &board,
             &scratch[..count],
             pull_mode,
-        );
+            effective_mode,
+            helper,
+        )?;
         let mut kept = 0usize;
         for i in 0..count {
             if valid[i] {
@@ -156,22 +239,32 @@ pub fn find_possible_moves(
         }
         count = kept;
 
-        if count == 1 && scratch[0].kill {
-            return Ok((vec![scratch[0]], false));
+        let mut box_moves: Vec<Move> = scratch[..count].to_vec();
+        count = detect_kill_moves(
+            ctx,
+            deadlock,
+            board_in,
+            &board,
+            &mut box_moves,
+            effective_mode,
+            helper,
+        );
+
+        if count == 1 && box_moves[0].kill {
+            return Ok((vec![box_moves[0]], has_corral));
         }
 
-        moves.extend_from_slice(&scratch[..count]);
+        moves.extend_from_slice(&box_moves[..count]);
 
         if moves.len() > MAX_MOVES - MAX_INNER {
             return Err(SolveError::TooManyMoves);
         }
     }
 
-    Ok((moves, false))
+    Ok((moves, has_corral))
 }
 
-/// Port of `apply_move`. Search-mode specific zone bookkeeping is deferred to
-/// the phases that introduce those modes.
+/// Port of `apply_move`.
 pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: &Level) {
     debug_assert_ne!(search_mode as i32, -1);
 
@@ -179,6 +272,9 @@ pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: 
         let (y, x) = level.coord(mv.from as usize);
         board.and_not(y, x, BOX);
         board.expand_sokoban_cloud();
+        if search_mode == SearchMode::DeadlockSearch {
+            update_deadlock_zone(level, board, mv.pull);
+        }
         return;
     }
 
@@ -215,6 +311,10 @@ pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: 
     }
 
     board.expand_sokoban_cloud();
+
+    if search_mode == SearchMode::DeadlockSearch {
+        update_deadlock_zone(level, board, mv.pull);
+    }
 }
 
 #[cfg(test)]
@@ -224,28 +324,30 @@ mod tests {
     use crate::solver::SearchClock;
     use std::time::Duration;
 
-    fn context(text: &str) -> LevelContext {
+    fn context(text: &str) -> (LevelContext, DeadlockState) {
         let level = Level::preprocess(parse_levels(text).remove(0)).unwrap();
         let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
-        LevelContext::analyse(level, &clock).unwrap()
+        let ctx = LevelContext::analyse(level, &clock).unwrap();
+        let state = DeadlockState::prepare(&ctx).unwrap();
+        (ctx, state)
     }
 
     #[test]
     fn generates_macro_pushes() {
-        let ctx = context("#######\n#@ $ .#\n#######\n");
+        let (ctx, mut deadlock) = context("#######\n#@ $ .#\n#######\n");
         let mut helper = crate::search::helper::Helper::default();
-        let (moves, has_corral) = find_possible_moves(
+        let (moves, _has_corral) = find_possible_moves(
             &ctx,
             &ctx.level.board,
             false,
             SearchMode::Normal,
             &mut helper,
+            &mut deadlock,
         )
         .unwrap();
-        assert!(!has_corral);
-        // Two pushes reachable in this corridor: one box move to (1,4), and
-        // the macro move all the way to (1,5).
-        assert_eq!(moves.len(), 2);
+        // The one-step push to (1,4) is pruned as an inefficient position, so
+        // only the macro push onto the target remains.
+        assert_eq!(moves.len(), 1);
         assert!(
             moves
                 .iter()
@@ -255,7 +357,7 @@ mod tests {
 
     #[test]
     fn apply_move_pushes_the_box() {
-        let ctx = context("#######\n#@ $ .#\n#######\n");
+        let (ctx, mut deadlock) = context("#######\n#@ $ .#\n#######\n");
         let mut helper = crate::search::helper::Helper::default();
         let (moves, _) = find_possible_moves(
             &ctx,
@@ -263,6 +365,7 @@ mod tests {
             false,
             SearchMode::Normal,
             &mut helper,
+            &mut deadlock,
         )
         .unwrap();
         let mut board = ctx.level.board;

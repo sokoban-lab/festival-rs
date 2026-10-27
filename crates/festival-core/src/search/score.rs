@@ -154,6 +154,21 @@ pub fn score_board(
 
     match search_mode {
         SearchMode::Normal | SearchMode::BaseSearch | SearchMode::ForwardWithBases => {}
+        SearchMode::DeadlockSearch => {
+            score.hotspots = crate::deadlock::zone::size_of_deadlock_zone(board) as i16;
+            return score;
+        }
+        SearchMode::KDistSearch | SearchMode::XySearch | SearchMode::MiniSearch => {
+            return score;
+        }
+        SearchMode::WobblersSearch | SearchMode::RoomsDeadlockSearch => {
+            score.boxes_on_targets = if pull_mode {
+                board.boxes_on_bases(&level.initial) as i16
+            } else {
+                board.boxes_on_targets() as i16
+            };
+            return score;
+        }
         // Feature-specific scoring is Phase 4/5. Keep a deterministic base
         // score instead of inventing semantics.
         _ => return score,

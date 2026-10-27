@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0/1 完成；Phase 2 正向 FESS 最小闭环已落地（单线程 NORMAL，冒烟集 12/12），反向 packing 与完整死锁子系统待 Phase 3/4（2026-10-27） |
+| 当前进展 | Phase 0/1/2/3 完成；完整死锁子系统与 C++ 判定逐盘面一致（Gate G3），反向 packing 与策略 A/B 待 Phase 4（2026-10-27） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1262,5 +1262,45 @@ Festival 的难点不在代码量，而在**隐式语义**：全局状态、固�
 
 **下一阶段入口**
 
-- Phase 3：deadlock zone、corral、advanced matching、positions、k-dist/xy/rooms/wobblers、缓存与学习；随后替换 `deadlock/oracle.rs` 的静态子集。
 - Phase 4：packing、park order、OOP、imagine、HF 家族，接通策略 A–G 的反向搜索与正向规划评分。
+
+---
+
+## 16. Phase 3 实施进展（2026-10-27）
+
+**已落地**
+
+- `deadlock/zone.rs`：deadlock zone 初始化/扩展/清理、pull/push 更新、岛（island）扩展、冻结箱清理，逐行对齐 `deadlock_utils.cpp`。
+- `deadlock/corral.rs`：corral 检测、active corral、π-corral、options、双组件 corral。
+- `deadlock/positions.rs` + `deadlock/cache.rs`：独立 `PositionSet` arena、位置哈希/指标、父子链、查询计数、开放寻址死锁缓存。
+- `deadlock/corral_search.rs`：corral 深搜、缓存标记、mini-corral 100 次查询门控、`advanced_deadlock_search`、pull 模式双组件消除。
+- `deadlock/mini.rs`：`can_put_all_on_targets` 打包可行性搜索。
+- `deadlock/k_dist.rs`、`xy.rs`、`rooms.rs`、`wobblers.rs`：四类专门死锁搜索与缓存。
+- `deadlock/mpdb.rs`：push/pull MPDB2 构建、已知死锁模式、`very_pullable`。
+- `deadlock/stuck.rs`、`cycle.rs`：运行时模式学习、`learn_from_subtrees`、`recheck_tree_with_patterns`、mini-corral 注册、cycle deadlock。
+- `deadlock/fixed_boxes.rs`、`diags.rs`、`direction.rs`：固定箱墙化、对角线、方向死锁。
+- `analysis/envelope.rs`：补齐 `init_envelope_patterns`（基于 mini search 的 envelope 学习）；这是差分中最后一个真实缺口，修复前 matching 会漏报死锁。
+- `deadlock/oracle.rs`：全量 `board_is_deadlocked` / `move_is_deadlocked`：matching、free pull、pull 全 zone、stuck、corral、diag、k-dist、wobblers、rooms；`UNIMPLEMENTED_CHECKS` 清空。
+- `moves.rs`：`find_possible_moves` 完整死锁剪枝（possible 掩码、corral options、kill moves、deadlock zone 更新）。
+- `search/tree.rs`、`search/fess.rs`、`search/score.rs`、`search/helper.rs`：每线程 `DeadlockState`、死锁评分、cycle/stuck 钩子、子树叶学习。
+- `reference/refcheck.cpp` + `scripts/build_refcheck.sh` + `festival-bench deadlock-diff`：盘面/走法差分驱动，输出 C++ 每次调用耗时（`.info`）。
+
+**缓存关闭语义**
+
+Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corral 的 100 次查询门控会影响后续搜索路径。因此“关闭缓存”实现为：缓存命中仍作为算法事实可见，但命中 `IS_DEADLOCK`/`NOT_DEADLOCK` 时在“禁止写入缓存”的沙箱中重算，并把同一批移动/生成调用镜像到关闭缓存的状态；这样关闭缓存只影响性能，不改变任何盘面或走法判定。
+
+**Gate G3 结果（2026-10-27）**
+
+- 差分样本：155 关、每关上限 2000 盘面、每关 50 个走法样本、seed 7，共 **238,928 个可达盘面、67,626 次 move 判定**。
+- 缓存开启：盘面判定 0 不一致、走法判定 0 不一致；Rust 单方死锁（新增误判）**0**，C++ 死锁而 Rust 非死锁 **0**；一致率 100%。
+- 缓存关闭：与缓存开启相比 **0** 处判定差异。
+- 单次耗时（P/E 核主机，双方绑定 CPU0）：盘面 1.00×、move 1.00×（缓存开启）；1.12× / 1.09×（缓存关闭），均在 1.3× 阈值内。
+- 解题回归：冒烟集 12/12；Microban 前 40 关 `-time 60` 40/40，总步数/推数 2359/640，40/40 解通过独立 LURD 回放。
+- 复现：`PIN_CPU=1 scripts/run_g3.sh`；命令、耗时与校验和记录于 `reference/BASELINE.md`。
+
+**Phase 3 有意保留的差异**
+
+- Gate 中的“策略 A/B 解题率达到 C++ 同策略 ≥90%”依赖 Phase 4 的反向 packing、base matching 与 HF 评分，Phase 3 未实现这两条策略；当前仅记录正向 `-alg 0` 在 Microban 前 40 关与 C++ 解题集一致。
+- envelope 学习未实现 C++ 的“超时中止”（`should_abort_envelopes`）；每关预处理会完整学习 envelope，超大赛题在 Phase 7 调优时再接入时钟预算。
+- 死锁缓存按线程本地实现（`DeadlockState`），C++ 为全局共享；多线程下的缓存共享/学习合并留待 Phase 6 调度阶段。
+- `refcheck` 仍只提供 deadlock/explain 模式，逐节点 trace 对比留待 Phase 4/6。

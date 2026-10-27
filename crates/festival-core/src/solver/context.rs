@@ -3,7 +3,7 @@
 
 //! Immutable per-level analysis shared by all search threads.
 
-use crate::analysis::{self, EnvelopePatterns, Hotspots, Rooms};
+use crate::analysis::{self, Hotspots, Rooms};
 use crate::constants::{INF, MAX_INNER};
 use crate::distance::{self, Distances};
 use crate::error::Result;
@@ -15,7 +15,6 @@ pub struct LevelContext {
     pub distances: Distances,
     pub rooms: Rooms,
     pub hotspots: Hotspots,
-    pub envelopes: EnvelopePatterns,
     /// Push distance from each cell to the nearest target (`scored_distance`).
     pub scored_distance: [u32; MAX_INNER],
 }
@@ -36,7 +35,6 @@ impl LevelContext {
             distances,
             rooms,
             hotspots,
-            envelopes: EnvelopePatterns::new(),
             scored_distance,
         })
     }

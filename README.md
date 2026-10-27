@@ -14,19 +14,22 @@ before the next one starts.
 | Phase 0 | complete | workspace, CLI, smoke set, LURD validator, CI |
 | Phase 1 | complete | board, `.sok` parser, preprocessing, BFS, box graph, push/pull distances, rooms, hotspots, holes, biconnectivity, fixed boxes, Hungarian matching |
 | Phase 2 | complete (forward-only, Gate G2) | arena tree, indexed heap, FESS requests/scores/advisors, unified deadlock oracle, cyclic `has_winning_move`, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
-| Phase 3+ | not started | full deadlock subsystem, packing/planning, GIRL/Dragonfly, multi-core scheduling |
+| Phase 3 | complete (deadlock subsystem, Gate G3) | deadlock zone, corral/π-corral, positions arena, deadlock cache, advanced/matching/pull elimination, k-distance, XY, rooms, wobblers, mini search, MPDB2, stuck learning, cycle deadlock, envelope learning, C++ deadlock differential |
+| Phase 4+ | not started | reverse packing, planning (park order/OOP/imagine), HF family, GIRL/Dragonfly, multi-core scheduling |
 
-The CLI now solves levels with a single-threaded **forward** FESS search
+The CLI solves levels with a single-threaded **forward** FESS search
 (`NORMAL` score). It writes `solutions.sok` and `times.txt` in `-out_dir` and
-replays every produced LURD solution with the independent validator.
+replays every produced LURD solution with the independent validator. The full
+deadlock subsystem now matches the C++ reference on 238,928 sampled boards
+(0 mismatches, 0 new false deadlocks, cache-off invariant).
 
-Phase 2 deliberately stops before reverse packing: `--forward-only` is the
-supported mode, `-alg 0` is accepted as the forward part of strategy A, and
-`-alg 1..7` is rejected with an explanatory error. Deadlock pruning uses the
-static subset (embedded patterns, 2×2/3×3, freeze and fixed-box checks);
-corral, matching, MPDB2, k-distance and wobblers arrive with Phase 3. Solution
-quality is therefore not yet comparable to the C++ solver — FESS can return a
-legal but non-minimal path until the planning features land in Phase 4.
+Phase 4 has not started: `--forward-only` is still the supported mode, `-alg 0`
+is the forward part of strategy A, and `-alg 1..7` is rejected with an
+explanatory error. Reverse packing, base matching and HF planning features are
+still missing, so solution quality is not yet comparable to C++ — FESS can
+return a legal but non-minimal path. Deadlock pruning itself is complete:
+zone/corral, matching, MPDB2, k-distance, XY, rooms, wobblers, tiny-corral,
+stuck and cycle checks all run in the move generator and the FESS tree.
 
 ## Build and run
 
@@ -59,11 +62,22 @@ cargo test -p festival-core --test corpus -- --ignored --nocapture
 cargo run -p festival-bench -- verify-solutions levels/corpus/microban.xsb out/solutions.sok
 ```
 
+Reproduce the Gate G3 deadlock differential (requires the C++ checkout):
+
+```sh
+PIN_CPU=1 scripts/run_g3.sh
+```
+
+`PIN_CPU` pins both binaries on hybrid CPUs (affinity mask on Windows, CPU
+index on Linux); without it, P/E-core scheduling can move the timing ratio by
+about 2x.
+
 Build the upstream C++ baseline for differential runs (requires a sibling
 `festival` checkout, or set `FESTIVAL_CPP_DIR`):
 
 ```sh
 scripts/build_cpp_ref.sh
+scripts/build_refcheck.sh
 ```
 
 Baseline commands, recorded results and per-level quality differences are in
@@ -91,17 +105,18 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/bfs.rs             connectivity BFS
   src/graph.rs           push/pull box-move graph
   src/distance.rs        distance matrices and impossible places
-  src/analysis/          rooms, hotspots, holes, biconnectivity, matching
-  src/deadlock/          unified oracle, static patterns, 2x2/3x3/freeze
+  src/analysis/          rooms, hotspots, holes, biconnectivity, matching, envelopes
+  src/deadlock/          zone, corral, advanced/matching, positions, cache, k-dist,
+                         XY, rooms, wobblers, mini, MPDB2, stuck, cycle
   src/search/            tree, heap, requests, scores, advisors, FESS loop
   src/io/lurd.rs         independent LURD replay validator
   src/io/solution.rs     player-path BFS, LURD and result files
 crates/festival-cli/     festival-rs binary
-crates/festival-bench/   static analysis CSV + solution verifier
+crates/festival-bench/   static analysis CSV, deadlock differential, solution verifier
 levels/smoke/            12 self-authored regression levels
 levels/corpus/           Microban I (155 levels, checksum + attribution)
 reference/               C++ baseline notes, pthread shim, refcheck driver
-scripts/                 corpus fetch, Gate G2, C++ baseline build
+scripts/                 corpus fetch, Gates G2/G3, C++ baseline builds
 ```
 
 ## Licensing

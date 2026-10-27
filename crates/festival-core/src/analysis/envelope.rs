@@ -4,13 +4,17 @@
 //! Envelope patterns (`envelope.cpp`).
 //!
 //! Envelopes are corral patterns that cannot be solved from any player zone.
-//! Only the deterministic pattern handling is ported here: building new
-//! patterns (`init_envelope_patterns`) needs the mini search and therefore
-//! lands with the deadlock phase.
+//! They are learned once per level by the mini search and then used by the
+//! fixed-box analysis to wallify unreachable box configurations.
 
+use crate::bfs;
 use crate::board::Board;
 use crate::constants::*;
+use crate::deadlock::mini::can_put_all_on_targets;
+use crate::deadlock::state::DeadlockState;
+use crate::error::{Result, SolveError};
 use crate::level::Level;
+use crate::solver::LevelContext;
 
 pub const MAX_ENVELOPE_PATTERNS: usize = 50;
 
@@ -24,6 +28,10 @@ pub struct EnvelopePatterns {
 impl EnvelopePatterns {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.patterns.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -220,6 +228,118 @@ pub fn put_sokoban_out_of_corral(
             board.or(y, x, SOKOBAN);
         }
     }
+}
+
+fn put_sokoban_in_zone(board: &mut Board, zones: &[u32; MAX_INNER], z: u32) {
+    board.clear_sokoban_inplace();
+    for y in 0..board.height() {
+        for x in 0..board.width() {
+            if zones[Board::flat_index(y, x)] == z && board.cell(y, x) & OCCUPIED == 0 {
+                board.or(y, x, SOKOBAN);
+            }
+        }
+    }
+    board.expand_sokoban_cloud();
+}
+
+/// Tries to pack every box from each player zone outside the corral.
+fn can_solve_from_any_zone(
+    ctx: &LevelContext,
+    state: &mut DeadlockState,
+    corrals: &[u32; MAX_INNER],
+    corral_index: u32,
+    board_in: &Board,
+) -> Result<bool> {
+    let mut board = *board_in;
+    let mut zones = [INF; MAX_INNER];
+    let zones_num = bfs::mark_connectivities(&ctx.level, &board, &mut zones);
+
+    let mut corral_zone = INF;
+    for y in 0..board.height() {
+        for x in 0..board.width() {
+            if corrals[Board::flat_index(y, x)] == corral_index {
+                corral_zone = zones[Board::flat_index(y, x)];
+            }
+        }
+    }
+    if corral_zone == INF {
+        return Err(SolveError::Internal("no corral zone".into()));
+    }
+
+    for z in 0..zones_num as u32 {
+        if z == corral_zone {
+            continue;
+        }
+        put_sokoban_in_zone(&mut board, &zones, z);
+        // C++ treats -1 (search aborted) as "might be solvable".
+        if can_put_all_on_targets(ctx, state, &board, 100)? != 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn analyse_envelope(
+    ctx: &LevelContext,
+    state: &mut DeadlockState,
+    corrals: &[u32; MAX_INNER],
+    corral_index: u32,
+    regular_boxes: &[usize],
+    diag_boxes: &[usize],
+) -> Result<()> {
+    if diag_boxes.len() >= 8 {
+        return Ok(());
+    }
+
+    for enum_diag in 0..=diag_boxes.len() {
+        for mask in 0..(1u32 << diag_boxes.len()) {
+            if mask.count_ones() as usize != enum_diag {
+                continue;
+            }
+
+            let mut board = ctx.level.initial;
+            set_up_corral(&ctx.level, regular_boxes, diag_boxes, mask, &mut board);
+            put_sokoban_out_of_corral(&ctx.level, &mut board, corrals, corral_index);
+
+            if board.boxes_in_level() == ctx.level.box_count {
+                continue;
+            }
+            if state.envelopes.already_in_envelopes(&board) {
+                continue;
+            }
+            if can_solve_from_any_zone(ctx, state, corrals, corral_index, &board)? {
+                continue;
+            }
+
+            if !state.envelopes.add(board) {
+                continue;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `init_envelope_patterns`: learns the level's unsolvable corral patterns.
+pub fn init_envelope_patterns(ctx: &LevelContext, state: &mut DeadlockState) -> Result<()> {
+    state.envelopes.clear();
+
+    let mut board = ctx.level.initial;
+    board.enter_reverse_mode(&ctx.level.initial, false);
+
+    let mut corrals = [INF; MAX_INNER];
+    let zones = bfs::mark_connectivities(&ctx.level, &board, &mut corrals);
+    if zones == 1 {
+        return Ok(());
+    }
+
+    for index in 0..zones as u32 {
+        let (regular_boxes, diag_boxes) = get_envelope_boxes(&ctx.level, &corrals, index);
+        if size_of_corral(&ctx.level, &corrals, index) > ctx.level.index_num() / 2 {
+            continue;
+        }
+        analyse_envelope(ctx, state, &corrals, index, &regular_boxes, &diag_boxes)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

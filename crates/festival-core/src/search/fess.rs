@@ -10,7 +10,8 @@
 use std::time::Duration;
 
 use crate::constants::{MAX_TREE_LABELS, SearchMode, TARGET};
-use crate::deadlock::oracle::DeadlockOracle;
+use crate::deadlock::cycle::check_cycle_deadlock;
+use crate::deadlock::oracle::move_is_deadlocked;
 use crate::error::{Result, SolveError};
 use crate::moves::{Move, apply_move};
 use crate::search::helper::Helper;
@@ -108,10 +109,6 @@ fn has_winning_move(
     Ok(true)
 }
 
-/// Port hook for `learn_from_subtrees`; learned stuck patterns arrive with
-/// Phase 3, so the subtree-learning pass is intentionally empty.
-fn learn_from_subtrees(_tree: &Tree, _expansion: ExpansionId) {}
-
 pub fn run_fess(
     ctx: &LevelContext,
     config: &FessConfig,
@@ -128,8 +125,8 @@ pub fn run_fess(
     }
 
     let clock = SearchClock::new(config.time_limit, config.max_expansions);
-    let oracle = DeadlockOracle::new(&ctx.level);
     let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
+    tree.prepare_deadlock(ctx)?;
     let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
     let mut helper = Helper::default();
 
@@ -218,7 +215,14 @@ pub fn run_fess(
         let played_move = tree.get_node_move(expanded_node, tree_son as usize);
 
         let board = tree.expansion_board(expanded_node)?;
-        if oracle.move_is_deadlocked(&board, &played_move, false) {
+        if move_is_deadlocked(
+            ctx,
+            &mut tree.deadlock,
+            &board,
+            &played_move,
+            false,
+            search_mode,
+        )? {
             tree.set_node_as_deadlocked(ctx, expanded_node, tree_son as usize)?;
             continue;
         }
@@ -243,6 +247,8 @@ pub fn run_fess(
             break;
         }
 
+        check_cycle_deadlock(&mut tree, best_so_far, ctx);
+
         if tree.nodes[tree.expansions[best_so_far as usize].node as usize].deadlocked {
             match tree.best_node_in_tree() {
                 Some(next) => best_so_far = next,
@@ -266,7 +272,7 @@ pub fn run_fess(
             break;
         }
 
-        learn_from_subtrees(&tree, new_node);
+        tree.learn_from_subtrees(ctx, new_node)?;
 
         if tree.check_if_perimeter_reached(&perimeter, ctx, &mut helper) {
             let past = tree.expansions[new_node as usize].best_past;

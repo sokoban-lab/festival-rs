@@ -86,8 +86,69 @@ Exit status 0, 96/100 solved at a 1 s budget, zero panics or bounds errors.
 The ignored test `microban_first_100_no_panic` repeats the sweep through the
 library API with a 250 ms budget (93/100 solved).
 
+## Gate G3 deadlock differential (2026-10-27)
+
+`reference/refcheck.cpp` samples reachable boards by walking the solver's pruned
+macro moves plus every physically legal push/pull successor, then records
+`board_is_deadlocked` (push and pull) and `move_is_deadlocked` for the first
+`move_samples` boards of each level. `festival-bench deadlock-diff` replays the
+boards through the Rust port and compares verdicts; with `--cache-off` it also
+compares a run whose cache returns no memoized verdicts.
+
+```sh
+PIN_CPU=1 scripts/run_g3.sh
+```
+
+The i9-14900HX host has P/E cores; unpinned single-thread runs drifted between
+0.9x and 2.0x because the scheduler moved between core types. Both binaries are
+therefore pinned to logical CPU 0 (`start /affinity 1`) and the C++ timings are
+recorded in the same pinned runs (`.info` files).
+
+Sampling: all 155 Microban levels, up to 2000 boards per level, 50 move samples
+per level, seed 7. Result: **238,928 boards and 67,626 move checks**.
+
+| Metric | Cache on | Cache off |
+|---|---|---|
+| Board verdict mismatches | 0 | 0 |
+| False positives (Rust deadlocked, C++ live) | 0 | 0 |
+| False negatives (C++ deadlocked, Rust live) | 0 | 0 |
+| Move verdict mismatches | 0 | 0 |
+| Verdict differences vs cache-on | — | 0 |
+| Rust/C++ board time per call | 1.00x | 1.12x |
+| Rust/C++ move time per call | 1.00x | 1.09x |
+
+C++ board time 18,305 ns/call, move time 34,591 ns/call. The first differential
+passes exposed a real gap: `init_envelope_patterns` had not been ported, so
+envelopes were empty and the fixed-box transform kept boxes that C++ wallifies.
+The resulting matching deadlocks were all false negatives; after adding the
+envelope learning (mini search based) the corpus is an exact match.
+
+Solver regressions with the full deadlock subsystem (`-time 60 -cores 1 -alg 0`):
+
+| Metric | C++ (G2 run) | Rust (G3 run) |
+|---|---|---|
+| Microban 1–40 solved | 40/40 | 40/40 |
+| Moves / pushes | 2383 / 650 | 2359 / 640 |
+| LURD replay | valid | 40/40 valid |
+
+Smoke set: 12/12 solved and replayed. The Gate's strategy A/B solve-rate item
+is a Phase 4 dependency: both strategies are built on reverse packing,
+base matching and HF scoring, which are not part of Phase 3. The forward-only
+`-alg 0` solve set matches C++ on these 40 levels.
+
+Recorded checksums (artifacts of this run; `times.txt` embeds a timestamp and
+the diff logs embed per-level timings, so they are identifiers rather than
+bit-reproducible content):
+
+```text
+c1daf1555e73edfcc235639defe5b78e70946891e957f03397640bdfcd0d0721 *target/g3all/diff.log
+8b9e3fbe760a041d25e732f9e95ffdbf8e143a715e8e5ff5330c3faf2172429d *target/g3all/diff-cacheoff.log
+758594de76a9a403ce62e01a5771d28c65fd39cf0034ff0e87912204a2446e65 *target/g3-microban/solutions.sok
+3b6cf6fd55e51791e7c8fbb63133ecd61eb8a9c3031f1ec183470abcf407ee6a *target/g3-microban/times.txt
+```
+
 ## Still missing
 
-`refcheck hash|static|deadlock|trace` has not been implemented yet. The current
-differential covers end-to-end solve results and independent solution replay;
-per-node trace comparison remains a Phase 3/6 task.
+`refcheck hash|static|trace` has not been implemented. The current differential
+covers per-board/per-move deadlock verdicts, end-to-end solve results and
+independent solution replay; per-node trace comparison remains a Phase 4/6 task.

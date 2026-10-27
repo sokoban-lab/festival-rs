@@ -426,6 +426,7 @@ mod tests {
     fn finds_the_player_path_for_a_push() {
         let level = level("#######\n#@ $ .#\n#######\n");
         let mut helper = crate::search::helper::Helper::default();
+        let mut deadlock = crate::deadlock::state::DeadlockState::default();
         let clock = crate::solver::SearchClock::new(Some(Duration::from_secs(60)), None);
         let ctx = crate::solver::LevelContext::analyse(level.clone(), &clock).unwrap();
         let (moves, _) = crate::moves::find_possible_moves(
@@ -434,6 +435,7 @@ mod tests {
             false,
             SearchMode::Normal,
             &mut helper,
+            &mut deadlock,
         )
         .unwrap();
         let target = level.index_at(1, 5).unwrap() as u16;
