@@ -367,6 +367,24 @@ impl Board {
         }
     }
 
+    /// Port of `go_to_final_position_with_given_walls`: keep walls, put boxes on
+    /// every target, remove all other boxes.
+    pub fn go_to_final_position_with_given_walls(&mut self) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let cell = self.cell(y, x);
+                if cell == WALL {
+                    continue;
+                }
+                if cell & TARGET != 0 {
+                    self.cells[y * MAX_SIZE + x] |= BOX;
+                } else {
+                    self.cells[y * MAX_SIZE + x] &= !BOX;
+                }
+            }
+        }
+    }
+
     pub fn keep_boxes_in_inner(&mut self, inner: &[bool; MAX_INNER]) {
         for y in 0..self.height {
             for x in 0..self.width {

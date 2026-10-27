@@ -44,6 +44,32 @@ impl Level {
         &self.inner
     }
 
+    /// Indices of all boxes, in index order (`get_indices_of_boxes`).
+    pub fn indices_of_boxes(&self, board: &crate::board::Board) -> Vec<usize> {
+        self.indices_where(|y, x| board.cell(y, x) & crate::constants::BOX != 0)
+    }
+
+    /// Indices of all targets, in index order (`get_indices_of_targets`).
+    pub fn indices_of_targets(&self, board: &crate::board::Board) -> Vec<usize> {
+        self.indices_where(|y, x| board.cell(y, x) & crate::constants::TARGET != 0)
+    }
+
+    /// Indices of the initial box positions (`get_indices_of_initial_bases`).
+    pub fn indices_of_initial_bases(&self) -> Vec<usize> {
+        self.indices_where(|y, x| self.initial.cell(y, x) & crate::constants::BOX != 0)
+    }
+
+    fn indices_where(&self, predicate: impl Fn(usize, usize) -> bool) -> Vec<usize> {
+        let mut indices = Vec::new();
+        for index in 0..self.index_num() {
+            let (y, x) = self.coord(index);
+            if predicate(y, x) {
+                indices.push(index);
+            }
+        }
+        indices
+    }
+
     pub fn boxes_as_board(&self) -> crate::board::Board {
         let mut boxes = self.initial;
         for y in 0..boxes.height() {

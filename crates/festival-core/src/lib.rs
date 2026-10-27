@@ -20,6 +20,7 @@ pub mod graph;
 pub mod io;
 pub mod level;
 pub mod moves;
+pub mod search;
 pub mod solver;
 
 pub use board::Board;

@@ -10,8 +10,8 @@ use crate::constants::*;
 pub fn mark_deadlock_2x2(board: &Board, blocked: &mut Board) {
     let height = board.height();
     let width = board.width();
-    let mut c = board.without_boxes();
-    c.clear_boxes_inplace();
+    // The C++ routine clears only the sokoban; boxes count as occupied.
+    let mut c = *board;
     c.clear_sokoban_inplace();
     blocked.zero();
 
@@ -58,6 +58,28 @@ pub fn mark_deadlock_2x2(board: &Board, blocked: &mut Board) {
             }
         }
     }
+}
+
+/// Port of `is_2x2_deadlock_at_place`: a fully occupied 2x2 square whose boxes
+/// are not all packed.
+pub fn is_2x2_deadlock_at_place(board: &Board, i: isize, j: isize) -> bool {
+    for y in 0..2 {
+        for x in 0..2 {
+            if board.get(i + y, j + x) & OCCUPIED == 0 {
+                return false;
+            }
+        }
+    }
+
+    for y in 0..2 {
+        for x in 0..2 {
+            let cell = board.get(i + y, j + x);
+            if cell & BOX != 0 && cell & TARGET == 0 {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0 脚手架完成；Phase 1 基础层/静态分析已落地并在 smoke 集上通过（2026-10-27） |
+| 当前进展 | Phase 0 完成；Phase 1 基础层/静态分析/固定箱/距离匹配已落地，MPDB2 与 C++ 差分待补（2026-10-27） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1204,19 +1204,24 @@ Festival 的难点不在代码量，而在**隐式语义**：全局状态、固�
 **已完成**
 
 - Workspace：`festival-core` / `festival-cli` / `festival-bench`，`#![forbid(unsafe_code)]`，CI（fmt/clippy/test/build）。
-- 基础层：51×51 `Board`、C++ 哈希公式、位标志、渲染、SOKOBAN 云。
+- 基础层：51×51 `Board`、C++ 哈希公式、位标志、渲染、SOKOBAN 云、`go_to_final_position_with_given_walls`。
 - 关卡 I/O：`.sok` 解析（空行/`_`/`-`、`Title:`、`;` 标题、超长行截断）、路径解析规则；LURD 回放校验器。
 - 预处理：sanity checks、装饰箱、补洞、inner/索引、保留 inner 箱、初始盘面、target holes/semi holes、禁区隧道。
 - 图与距离：push/pull 图、BFS 迭代、可逆 move、推/拉距离矩阵、BFS 距离、`impossible_place`。
 - 静态分析：房间划分与房间图、热点表、双连通评分、2×2 静态死锁、对角死锁、内嵌死锁模式表（含旋转/翻转）。
-- smoke 集 12 关、端到端静态分析测试、LURD 解回放测试；`cargo fmt`/`clippy -D warnings`/测试全绿。
+- 固定箱：`turn_2x2_to_walls`、`close_holes`、`remove_all_pushable_boxes`、`fix_crystaline`、`turn_immovable_boxes_to_walls`、`fix_diagonals`、`turn_fixed_boxes_into_walls`、`is_box_2x2_frozen_*`。
+- 方向死锁：`is_2x2_deadlock_at_place`、`deadlock_in_direction`；同时修正 `mark_deadlock_2x2`，箱子按 C++ 语义计为 occupied（此前误清除箱子）。
+- 分配与距离评分：Hungarian（含单行变更缓存、BFS 增广）、`compute_match_distance` / `compute_imagine_distance` / `compute_base_distance` / `compute_rev_distance`、`ScoreElement`。
+- 信封：模式匹配、pattern wallify、`fix_boxes_using_envelopes`、corral 目标收集与摆放辅助。
+- smoke 集 12 关、端到端静态分析测试、LURD 解回放测试；62 个单元测试 + 2 个集成测试；`cargo fmt`/`clippy -D warnings`/测试全绿。
 
 **Phase 1 未完项**
 
-- `fixed_boxes`、`envelope`、`mpdb2`、`match_distance`、`hungarian`、`deadlock_in_direction`。
+- `mpdb2`：检测结构可移植，但 `build_mpdb2` / `build_pull_mpdb2` 依赖 mini search 与 XY 死锁（Phase 3）。
+- `envelope`：`init_envelope_patterns` / `analyse_envelope` 依赖 mini search（Phase 3）。
 - 与 C++ `refcheck static` 的逐值差分（当前机器无 g++/MSYS2/WSL，见 `reference/BASELINE.md`）。
 
 **下一阶段入口**
 
-- 先补 Phase 1 剩余确定性模块与 MPDB2；
-- 再进入 Phase 2：`Tree`/`IndexedHeap`/`Score`/FESS 主循环、解提取与 CLI 求解模式。
+- 进入 Phase 2：`Tree`/`IndexedHeap`/`Score`/FESS 主循环、解提取、移动生成与 CLI 求解模式。
+- MPDB2、envelope 构建与 C++ 差分随 Phase 3 的 mini search / XY 死锁一并补齐。
