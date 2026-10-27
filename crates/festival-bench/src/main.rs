@@ -66,7 +66,101 @@ fn main() -> ExitCode {
         return deadlock_explain(Path::new(&args[1]), level_number, &args[3], cache_off);
     }
 
+    if args.first().map(String::as_str) == Some("packing-plan") {
+        if args.len() != 5 {
+            eprintln!(
+                "usage: festival-bench packing-plan <levels.sok> <level> <strategy> <log_nodes>"
+            );
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        let strategy: usize = args[3].parse().unwrap_or(usize::MAX);
+        let log_nodes: u32 = args[4].parse().unwrap_or(0);
+        return packing_plan(Path::new(&args[1]), level_number, strategy, log_nodes);
+    }
+
     analyse(args.first().map(String::as_str).unwrap_or("XSokoban"))
+}
+
+fn packing_plan(
+    levels_path: &Path,
+    level_number: usize,
+    strategy: usize,
+    log_nodes: u32,
+) -> ExitCode {
+    use festival_core::search::packing::{PackingConfig, run_packing};
+    use festival_core::search::perimeter::Perimeter;
+    use festival_core::search::tree::Tree;
+    use festival_core::solver::strategy::BACKWARD_SEARCH_TYPES;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let Some(&mode) = BACKWARD_SEARCH_TYPES.get(strategy) else {
+        eprintln!("strategy must be 0..7");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(3600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut tree = match Tree::new_with_level(log_nodes, &ctx.level) {
+        Ok(tree) => tree,
+        Err(err) => {
+            eprintln!("tree: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = tree.prepare_deadlock(&ctx) {
+        eprintln!("deadlock: {err}");
+        return ExitCode::FAILURE;
+    }
+    let mut helper = Helper::default();
+    let mut perimeter = Perimeter::new(log_nodes.min(22));
+    helper.weighted_search = true;
+    let run = match run_packing(
+        &ctx,
+        &mut tree,
+        &mut helper,
+        &mut perimeter,
+        &PackingConfig {
+            time_limit: Some(Duration::from_secs(3600)),
+            max_expansions: None,
+        },
+        mode,
+    ) {
+        Ok(run) => run,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("expansions {}", run.expansions);
+    println!("plan {}", helper.parking_order.len());
+    for step in &helper.parking_order {
+        println!("{} {} {}", step.from, step.to, step.until);
+    }
+    ExitCode::SUCCESS
 }
 
 fn deadlock_explain(
@@ -706,6 +800,14 @@ fn verify_solutions(levels_path: &Path, solutions_path: &Path) -> ExitCode {
         }
     };
 
+    let titles: HashMap<&str, usize> = raws
+        .iter()
+        .enumerate()
+        .filter(|(_, raw)| !raw.title.is_empty() && raw.title != "None")
+        .rev()
+        .map(|(index, raw)| (raw.title.as_str(), index + 1))
+        .collect();
+
     let mut levels: HashMap<usize, Level> = HashMap::new();
     let mut current_level: Option<usize> = None;
     let mut expect_lurd = false;
@@ -725,6 +827,9 @@ fn verify_solutions(levels_path: &Path, solutions_path: &Path) -> ExitCode {
             continue;
         }
         if !expect_lurd {
+            if let Some(&number) = titles.get(line.trim()) {
+                current_level = Some(number);
+            }
             continue;
         }
         if line.trim().is_empty() {

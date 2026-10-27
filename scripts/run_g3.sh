@@ -47,8 +47,8 @@ pin ./target/release/festival-bench.exe deadlock-diff \
 # Solver regressions with the full deadlock subsystem enabled.
 mkdir -p target/g3-smoke target/g3-microban
 cargo run --release -q -p festival-cli -- levels/smoke/smoke.sok \
-    --time 60 --cores 1 --alg 0 --out_dir target/g3-smoke
+    --time 60 --cores 1 --forward-only --out_dir target/g3-smoke
 cargo run --release -q -p festival-cli -- levels/corpus/microban.xsb \
-    --from 1 --to 40 --time 60 --cores 1 --alg 0 --out_dir target/g3-microban
+    --from 1 --to 40 --time 60 --cores 1 --forward-only --out_dir target/g3-microban
 ./target/release/festival-bench.exe verify-solutions \
     levels/corpus/microban.xsb target/g3-microban/solutions.sok

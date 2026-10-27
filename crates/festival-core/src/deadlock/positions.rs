@@ -105,6 +105,7 @@ impl PositionSet {
     fn set_scores_to_moves(
         &self,
         ctx: &LevelContext,
+        helper: &crate::search::helper::Helper,
         board: &Board,
         moves: &[Move],
         pull_mode: bool,
@@ -118,7 +119,7 @@ impl PositionSet {
             let mut c = *board;
             apply_move(&mut c, mv, search_mode, &ctx.level);
             hashes.push(c.hash());
-            scores.push(score_board(ctx, &c, pull_mode, search_mode));
+            scores.push(score_board(ctx, helper, &c, pull_mode, search_mode));
         }
     }
 
@@ -164,12 +165,13 @@ impl PositionSet {
 
         let mut p = Position::empty(board, pull_mode, search_mode);
         p.has_corral = has_corral;
-        p.position_score = score_board(ctx, &board, pull_mode, search_mode);
+        p.position_score = score_board(ctx, helper, &board, pull_mode, search_mode);
         p.moves = moves;
         p.move_deadlocked = vec![false; p.moves.len()];
         p.position_hash = board.hash();
         self.set_scores_to_moves(
             ctx,
+            helper,
             &board,
             &p.moves,
             pull_mode,
@@ -228,6 +230,7 @@ impl PositionSet {
         p.weight = self.positions[node].weight + self.positions[node].moves[son].attr.weight as i32;
         self.set_scores_to_moves(
             ctx,
+            helper,
             &board,
             &p.moves,
             pull_mode,

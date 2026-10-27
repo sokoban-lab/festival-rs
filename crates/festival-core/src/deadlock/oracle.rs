@@ -426,7 +426,7 @@ fn verify_simple_base_matching(
     true
 }
 
-fn check_matching_deadlock(
+pub(crate) fn check_matching_deadlock(
     ctx: &LevelContext,
     state: &mut DeadlockState,
     board_in: &Board,
@@ -846,6 +846,54 @@ pub fn check_deadlock_in_moves(
 /// Deadlock-zone size helper used by `score_board`.
 pub fn deadlock_zone_score(board: &Board) -> i16 {
     size_of_deadlock_zone(board) as i16
+}
+
+/// Port of `can_played_reversed` (BASE_SEARCH only).
+pub fn can_played_reversed(
+    ctx: &LevelContext,
+    state: &DeadlockState,
+    board: &Board,
+    mv: &Move,
+    pull_mode: bool,
+    search_mode: SearchMode,
+) -> Result<bool> {
+    if search_mode != SearchMode::BaseSearch {
+        return Ok(true);
+    }
+    debug_assert!(pull_mode);
+    if search_mode == SearchMode::GirlSearch {
+        return Ok(true);
+    }
+
+    let mut c = *board;
+    apply_move(&mut c, mv, SearchMode::Normal, &ctx.level);
+
+    if c.is_solved(true, &ctx.level.initial, ctx.level.initial_sokoban) {
+        return Ok(true);
+    }
+
+    let (to_y, to_x) = ctx.level.coord(mv.to as usize);
+    if crate::bfs::get_connectivity(&ctx.level, &c) > 1 {
+        c.clear_bases_inplace();
+        let w = crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+            &ctx.level,
+            &ctx.distances,
+            &c,
+            &state.envelopes,
+        );
+        if let Some(options) =
+            crate::deadlock::corral::detect_corral(&ctx.level, &ctx.distances, &w)
+        {
+            if mv.base {
+                return Ok(false);
+            }
+            if options.cell(to_y, to_x) & BOX == 0 {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
 }
 
 /// Port of `position_is_solved` for the `DEADLOCK_SEARCH` subset.

@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0/1/2/3 完成；完整死锁子系统与 C++ 判定逐盘面一致（Gate G3），反向 packing 与策略 A/B 待 Phase 4（2026-10-27） |
+| 当前进展 | Phase 0/1/2/3/4 完成；策略 A/B/D/E/F/G 与 C++ 同策略在 Microban 1–80 上解题集一致，packing 计划 397/400 逐项一致、3 个等价变体（Gate G4），GIRL/Dragonfly 待 Phase 5（2026-10-27） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1304,3 +1304,46 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 - envelope 学习未实现 C++ 的“超时中止”（`should_abort_envelopes`）；每关预处理会完整学习 envelope，超大赛题在 Phase 7 调优时再接入时钟预算。
 - 死锁缓存按线程本地实现（`DeadlockState`），C++ 为全局共享；多线程下的缓存共享/学习合并留待 Phase 6 调度阶段。
 - `refcheck` 仍只提供 deadlock/explain 模式，逐节点 trace 对比留待 Phase 4/6。
+
+---
+
+## 17. Phase 4 实施进展（2026-10-27）
+
+**已落地**
+
+- `planning/park_order.rs`：`verify_parking_order`、`fix_consecutive_pushes`、`get_parking_plan`、`keep_only_perm`、`reduce_parking_order`、`conclude_parking`、`score_parked_boxes`、`next_parking_place`。
+- `planning/oop.rs`、`overlap.rs`、`imagine.rs`、`heuristics.rs`、`opener.rs`：out-of-plan 区域与逐步距离、完整停车顺序重叠、imagined board/HF board、base matching/sink square/packing advisor、opener 与 explorer。
+- `search/packing.rs`：多根 pull packing 搜索、start zones、`declare_roots`、packing request 环、perimeter 插入、cycle/stuck 钩子、`conclude_parking`。
+- `search/hf.rs`、`max_dist.rs`：HF/BICON/MAX_DIST 评分与比较、REV 评分与 advisor、`setup_rev_board`、MAX_DIST 距离重写。
+- `search/score.rs`、`features.rs`、`advisors.rs`：HF 家族、REV、BASE/FORWARD_WITH_BASES 的完整评分与 advisor；`search/helper.rs` 保存每线程规划状态与 push/pull scored distance。
+- `moves.rs`：BASE_SEARCH 的 possible 掩码、REV pull 墙化过滤、sink/base 消除。
+- `solver/strategy.rs` + CLI：策略 A/B/D/E/F/G 反向→规划→正向链路；`--alg` 恢复 C++ 语义（0 = 策略 A），`--forward-only` 保留 Phase 2 的 NORMAL 前向模式。
+- 差分工具：`refcheck plan`、`festival-bench packing-plan`、`scripts/compare_packing_plans.py`、`scripts/run_g4.sh`。
+- 质量门：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 全绿。
+
+**Gate G4 结果（2026-10-27，`G4_TIME=60 scripts/run_g4.sh`）**
+
+| 策略 | Microban 1–80 解题 | Moves / Pushes（C++ → Rust） | 比例 |
+|---|---|---|---|
+| 0 A | 80/80 → 80/80 | 6577/1745 → 6625/1763 | 100.7% / 101.0% |
+| 1 B | 80/80 → 80/80 | 6362/1691 → 6362/1691 | 100.0% / 100.0% |
+| 3 D | 80/80 → 80/80 | 6385/1719 → 6385/1719 | 100.0% / 100.0% |
+| 4 E | 80/80 → 80/80 | 6364/1707 → 6364/1707 | 100.0% / 100.0% |
+| 5 F | 80/80 → 80/80 | 6388/1713 → 6388/1713 | 100.0% / 100.0% |
+| 6 G | 80/80 → 80/80 | 6746/1789 → 6742/1793 | 99.9% / 100.2% |
+
+- 冒烟集 12/12：六个策略双方步数/推数完全相同；Microban 全部 6×80 个 Rust 解通过独立 LURD 回放（0 invalid）。
+- 策略 A 推数 101.0%，满足 ≤102%；总耗时 C++ 60.84 s vs Rust 31.06 s（0.51×，Gate 上限 1.5×）。
+- 停车顺序：5 个策略 × 80 关 = 400 组、固定树规模 `log2(nodes)=20`；397 组逐项一致，3 组为等价变体（B/D 第 12 关仅中间目标 8 vs 4；D 第 61 关 7 vs 9 步、最终目标集相同），0 组语义不同。
+- 仅 A 与 G 存在关卡级差异（A 9 关、G 3 关），逐关步数/推数见 `reference/BASELINE.md`。
+
+**Phase 4 有意保留的差异**
+
+- 策略 C（GIRL）与 H（Dragonfly）仍拒绝运行，留待 Phase 5；`-cores > 1` 只提示单线程。
+- `--alg 0` 现在是策略 A；复现 G2 的 NORMAL 前向数据需加 `--forward-only`（`scripts/run_g2.sh` 已更新）。
+- `refcheck plan` 为对比 packing 计划直接调用 `packing_search`，链接时使用了 8 MB 栈；不改变求解器逻辑与参考二进制。
+- 逐节点 trace 与多核调度仍未实现。
+
+**下一阶段入口**
+
+- Phase 5：GIRL、Dragonfly、策略 C/H、`refcheck trace` 数值差分。

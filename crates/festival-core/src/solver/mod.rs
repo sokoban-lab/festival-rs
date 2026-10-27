@@ -4,7 +4,9 @@
 pub mod clock;
 pub mod context;
 pub mod forward;
+pub mod strategy;
 
 pub use clock::SearchClock;
 pub use context::LevelContext;
 pub use forward::{SolveOutcome, solve_forward};
+pub use strategy::{StrategyConfig, solve_strategy, strategy_supported};

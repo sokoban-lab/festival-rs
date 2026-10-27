@@ -2,14 +2,17 @@
 // Rust port: festival-rs contributors.
 
 //! Advisor selection (`advisors.cpp`).
-//!
-//! Phase 2 implements the advisors that only need the four basic score fields.
-//! Planning advisors (opener, explorer, out-of-plan, imagine) stay at `-1`
-//! until Phase 4.
 
+use crate::board::Board;
 use crate::constants::SearchMode;
+use crate::deadlock::state::DeadlockState;
+use crate::error::Result;
 use crate::moves::Move;
+use crate::planning::{heuristics, imagine, oop, opener};
+use crate::search::helper::Helper;
+use crate::search::hf;
 use crate::search::score::{ScoreElement, is_better_score};
+use crate::solver::LevelContext;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdvisorsElement {
@@ -44,7 +47,6 @@ enum Criterion {
     Connectivity,
     Rooms,
     Hotspots,
-    OutOfPlan,
 }
 
 fn choose_advisor(
@@ -66,7 +68,6 @@ fn choose_advisor(
             Criterion::Connectivity => score.connectivity < base_score.connectivity,
             Criterion::Rooms => score.rooms_score < base_score.rooms_score,
             Criterion::Hotspots => score.hotspots < base_score.hotspots,
-            Criterion::OutOfPlan => score.out_of_plan < base_score.out_of_plan,
         };
         if !better {
             continue;
@@ -87,58 +88,9 @@ fn choose_advisor(
     best_move
 }
 
-/// Port of `set_advisors_inner` restricted to Phase 2 score fields.
-pub fn set_advisors_inner(
-    base_score: &ScoreElement,
-    moves: &[Move],
-    scores: &[ScoreElement],
-    pull_mode: bool,
-    search_mode: SearchMode,
-    already_expanded: &[bool],
-) -> AdvisorsElement {
-    let mut advisors = AdvisorsElement::default();
-
-    if matches!(
-        search_mode,
-        SearchMode::GirlSearch | SearchMode::NaiveSearch | SearchMode::SnailSearch
-    ) {
-        return advisors;
-    }
-
-    if matches!(
-        search_mode,
-        SearchMode::HfSearch
-            | SearchMode::BiconSearch
-            | SearchMode::MaxDistSearch
-            | SearchMode::MaxDistSearch2
-            | SearchMode::NetlockSearch
-    ) {
-        advisors.pack = default_advisor(
-            base_score,
-            moves,
-            scores,
-            pull_mode,
-            search_mode,
-            already_expanded,
-        );
-        return advisors;
-    }
-
-    if pull_mode {
-        // Packing / room / explorer advisors depend on Phase 4 planning data.
-        return advisors;
-    }
-
-    advisors.pack = choose_advisor(base_score, scores, Criterion::Packed, false);
-    advisors.connectivity = choose_advisor(base_score, scores, Criterion::Connectivity, false);
-    advisors.rooms = choose_advisor(base_score, scores, Criterion::Rooms, false);
-    advisors.hotspots = choose_advisor(base_score, scores, Criterion::Hotspots, false);
-    advisors.out_of_plan = choose_advisor(base_score, scores, Criterion::OutOfPlan, false);
-
-    advisors
-}
-
+/// Port of `set_default_advisor` (HF family).
 fn default_advisor(
+    ctx: &LevelContext,
     base_score: &ScoreElement,
     moves: &[Move],
     scores: &[ScoreElement],
@@ -150,9 +102,12 @@ fn default_advisor(
     let mut result = -1i32;
 
     for (index, score) in scores.iter().enumerate() {
-        // `from` is a box cell; pulling from a hole is checked by the caller in
-        // C++, which has the target-hole mask. Phase 2 leaves it to Phase 3.
-        let _ = moves.get(index);
+        if pull_mode {
+            let (y, x) = ctx.level.coord(moves[index].from as usize);
+            if ctx.level.target_holes.cell(y, x) != 0 {
+                continue;
+            }
+        }
         if already_expanded.get(index).copied().unwrap_or(false) {
             continue;
         }
@@ -162,6 +117,113 @@ fn default_advisor(
         }
     }
     result
+}
+
+/// Port of `discard_advisors_in_base_search`.
+fn discard_advisors_in_base_search(moves: &[Move], advisors: &mut AdvisorsElement) {
+    if advisors.pack == -1 {
+        return;
+    }
+    if moves[advisors.pack as usize].base {
+        advisors.connectivity = -1;
+        advisors.rooms = -1;
+        advisors.hotspots = -1;
+        advisors.opener = -1;
+        advisors.out_of_plan = -1;
+        advisors.explorer = -1;
+        advisors.imagine = -1;
+    }
+}
+
+/// Port of `set_advisors_inner`.
+#[allow(clippy::too_many_arguments)]
+pub fn set_advisors_inner(
+    ctx: &LevelContext,
+    helper: &Helper,
+    deadlock: &mut DeadlockState,
+    board: &Board,
+    base_score: &ScoreElement,
+    moves: &[Move],
+    scores: &[ScoreElement],
+    pull_mode: bool,
+    search_mode: SearchMode,
+    already_expanded: &[bool],
+) -> Result<AdvisorsElement> {
+    let mut advisors = AdvisorsElement::default();
+
+    if matches!(
+        search_mode,
+        SearchMode::GirlSearch | SearchMode::NaiveSearch | SearchMode::SnailSearch
+    ) {
+        return Ok(advisors);
+    }
+
+    if matches!(
+        search_mode,
+        SearchMode::HfSearch
+            | SearchMode::BiconSearch
+            | SearchMode::MaxDistSearch
+            | SearchMode::MaxDistSearch2
+            | SearchMode::NetlockSearch
+    ) {
+        advisors.pack = default_advisor(
+            ctx,
+            base_score,
+            moves,
+            scores,
+            pull_mode,
+            search_mode,
+            already_expanded,
+        );
+        return Ok(advisors);
+    }
+
+    if search_mode == SearchMode::RevSearch {
+        advisors.pack = hf::set_rev_advisor(
+            ctx,
+            board,
+            base_score,
+            moves,
+            scores,
+            pull_mode,
+            search_mode,
+            already_expanded,
+        );
+        return Ok(advisors);
+    }
+
+    if pull_mode {
+        advisors.pack = heuristics::packing_search_advisor(
+            ctx,
+            deadlock,
+            board,
+            base_score,
+            moves,
+            scores,
+            search_mode,
+        )?;
+        advisors.connectivity = choose_advisor(base_score, scores, Criterion::Connectivity, true);
+        advisors.rooms = choose_advisor(base_score, scores, Criterion::Rooms, true);
+        advisors.explorer = opener::explorer(ctx, board, base_score, moves, scores, pull_mode);
+
+        if search_mode == SearchMode::BaseSearch {
+            discard_advisors_in_base_search(moves, &mut advisors);
+        }
+        return Ok(advisors);
+    }
+
+    advisors.pack = choose_advisor(base_score, scores, Criterion::Packed, false);
+    advisors.connectivity = choose_advisor(base_score, scores, Criterion::Connectivity, false);
+    advisors.rooms = choose_advisor(base_score, scores, Criterion::Rooms, false);
+    advisors.hotspots = choose_advisor(base_score, scores, Criterion::Hotspots, false);
+    advisors.imagine = imagine::choose_imagine_advisor(base_score, scores, search_mode);
+    advisors.out_of_plan =
+        oop::new_oop_advisor(ctx, board, base_score, moves, scores, pull_mode, helper);
+    advisors.opener =
+        opener::pick_opener(ctx, board, base_score, moves, scores, pull_mode, helper)?;
+    advisors.explorer = opener::explorer(ctx, board, base_score, moves, scores, pull_mode);
+
+    Ok(advisors)
 }
 
 pub fn is_an_advisor(advisors: &AdvisorsElement, son: usize) -> bool {

@@ -15,21 +15,20 @@ before the next one starts.
 | Phase 1 | complete | board, `.sok` parser, preprocessing, BFS, box graph, push/pull distances, rooms, hotspots, holes, biconnectivity, fixed boxes, Hungarian matching |
 | Phase 2 | complete (forward-only, Gate G2) | arena tree, indexed heap, FESS requests/scores/advisors, unified deadlock oracle, cyclic `has_winning_move`, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
 | Phase 3 | complete (deadlock subsystem, Gate G3) | deadlock zone, corral/π-corral, positions arena, deadlock cache, advanced/matching/pull elimination, k-distance, XY, rooms, wobblers, mini search, MPDB2, stuck learning, cycle deadlock, envelope learning, C++ deadlock differential |
-| Phase 4+ | not started | reverse packing, planning (park order/OOP/imagine), HF family, GIRL/Dragonfly, multi-core scheduling |
+| Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
+| Phase 5+ | not started | GIRL, Dragonfly, strategies C/H, multi-core scheduling |
 
-The CLI solves levels with a single-threaded **forward** FESS search
-(`NORMAL` score). It writes `solutions.sok` and `times.txt` in `-out_dir` and
-replays every produced LURD solution with the independent validator. The full
-deadlock subsystem now matches the C++ reference on 238,928 sampled boards
-(0 mismatches, 0 new false deadlocks, cache-off invariant).
+The CLI now runs the same reverse-packing → plan → forward-FESS strategy
+structure as C++. `-alg 0` means strategy A (C++ compatible), and
+`--forward-only` keeps the Phase 2 NORMAL forward search. Strategies 0, 1, 3,
+4, 5, 6 solve Microban 1–80 with the same solve set as C++; all 480 Rust
+solutions replay independently, and total wall time is 0.51× C++ (Gate G4).
+Strategy C (GIRL) and H (Dragonfly) still report an explanatory error.
 
-Phase 4 has not started: `--forward-only` is still the supported mode, `-alg 0`
-is the forward part of strategy A, and `-alg 1..7` is rejected with an
-explanatory error. Reverse packing, base matching and HF planning features are
-still missing, so solution quality is not yet comparable to C++ — FESS can
-return a legal but non-minimal path. Deadlock pruning itself is complete:
-zone/corral, matching, MPDB2, k-distance, XY, rooms, wobblers, tiny-corral,
-stuck and cycle checks all run in the move generator and the FESS tree.
+The deadlock subsystem remains the G3 implementation: 238,928 sampled boards
+with 0 verdict mismatches and a cache-on/cache-off invariant. Output files are
+`solutions.sok` and `times.txt` in `-out_dir`; every solution is replayed with
+the independent validator.
 
 ## Build and run
 
@@ -80,6 +79,13 @@ scripts/build_cpp_ref.sh
 scripts/build_refcheck.sh
 ```
 
+Reproduce Gate G4 (packing plans + strategies 0/1/3/4/5/6 on smoke and
+Microban 1–80):
+
+```sh
+G4_TIME=60 scripts/run_g4.sh
+```
+
 Baseline commands, recorded results and per-level quality differences are in
 [`reference/BASELINE.md`](reference/BASELINE.md).
 
@@ -108,15 +114,19 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/analysis/          rooms, hotspots, holes, biconnectivity, matching, envelopes
   src/deadlock/          zone, corral, advanced/matching, positions, cache, k-dist,
                          XY, rooms, wobblers, mini, MPDB2, stuck, cycle
-  src/search/            tree, heap, requests, scores, advisors, FESS loop
+  src/search/            tree, heap, requests, scores, advisors, FESS loop,
+                         packing search, HF/MAX_DIST scoring, perimeter
+  src/solver/            strategy A/B/D/E/F/G runner, clocks, outcome
+  src/planning/          park order, OOP, imagine/overlap, base matching, opener
   src/io/lurd.rs         independent LURD replay validator
   src/io/solution.rs     player-path BFS, LURD and result files
 crates/festival-cli/     festival-rs binary
-crates/festival-bench/   static analysis CSV, deadlock differential, solution verifier
+crates/festival-bench/   static analysis CSV, deadlock differential, packing plans,
+                         solution verifier
 levels/smoke/            12 self-authored regression levels
 levels/corpus/           Microban I (155 levels, checksum + attribution)
 reference/               C++ baseline notes, pthread shim, refcheck driver
-scripts/                 corpus fetch, Gates G2/G3, C++ baseline builds
+scripts/                 corpus fetch, Gates G2/G3/G4, plan comparator, C++ builds
 ```
 
 ## Licensing

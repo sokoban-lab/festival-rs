@@ -154,6 +154,8 @@ pub fn find_possible_moves(
     }
     if !pull_mode {
         possible = bfs::get_srcs_of_all_targets(level, &board);
+    } else if search_mode == SearchMode::BaseSearch {
+        possible = crate::planning::heuristics::compute_possible_from_bases(ctx, &board)?;
     }
 
     let mut use_corral = !matches!(
@@ -190,6 +192,13 @@ pub fn find_possible_moves(
         let (y, x) = level.coord(index);
 
         if has_corral && corral_options.cell(y, x) & BOX == 0 {
+            continue;
+        }
+        if search_mode == SearchMode::RevSearch
+            && pull_mode
+            && !helper.perimeter_found
+            && helper.wallified.cell(y, x) != 0
+        {
             continue;
         }
         if board.cell(y, x) & BOX == 0 {
@@ -251,7 +260,9 @@ pub fn find_possible_moves(
         );
 
         if count == 1 && box_moves[0].kill {
-            return Ok((vec![box_moves[0]], has_corral));
+            moves.clear();
+            moves.push(box_moves[0]);
+            break;
         }
 
         moves.extend_from_slice(&box_moves[..count]);
@@ -259,6 +270,10 @@ pub fn find_possible_moves(
         if moves.len() > MAX_MOVES - MAX_INNER {
             return Err(SolveError::TooManyMoves);
         }
+    }
+
+    if search_mode == SearchMode::BaseSearch {
+        moves = crate::planning::heuristics::mark_sink_squares_moves(ctx, deadlock, &board, moves)?;
     }
 
     Ok((moves, has_corral))

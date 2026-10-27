@@ -15,7 +15,7 @@ use festival_core::io::solution::{
     write_solutions_header, write_times_footer, write_times_header,
 };
 use festival_core::search::FessConfig;
-use festival_core::solver::solve_forward;
+use festival_core::solver::{StrategyConfig, solve_forward, solve_strategy, strategy_supported};
 use festival_core::{Level, LevelContext, SearchClock};
 
 const SOLVER_NAME: &str = "Festival 3.1";
@@ -25,7 +25,7 @@ const BASE_TREE_LOG_SIZE: u32 = 20;
 #[derive(Debug, Parser)]
 #[command(
     name = "festival-rs",
-    about = "Festival 3.1 Rust port. Phase 2: forward FESS search.",
+    about = "Festival 3.1 Rust port. Phase 4: reverse packing, planning and HF strategies.",
     disable_help_subcommand = true
 )]
 struct Args {
@@ -67,11 +67,12 @@ struct Args {
     #[arg(long = "max-expansions", value_name = "N")]
     max_expansions: Option<u64>,
 
-    /// Skip the reverse packing search (development only; Phase 2 always does).
+    /// Skip the reverse packing search and run NORMAL FESS from the initial
+    /// position (development/differential mode).
     #[arg(long = "forward-only")]
     forward_only: bool,
 
-    /// Replay and validate every produced solution (always enabled in Phase 2).
+    /// Replay and validate every produced solution.
     #[arg(long = "validate")]
     validate: bool,
 
@@ -138,10 +139,9 @@ fn run(args: &Args) -> Result<(), String> {
         if !(0..=7).contains(&alg) {
             return Err("Algorithm number should be 0..7".to_string());
         }
-        if alg != 0 {
+        if !strategy_supported(alg as usize) {
             return Err(format!(
-                "strategy {alg} needs reverse packing, which arrives in Phase 4; \
-                 Phase 2 supports -alg 0 / --forward-only"
+                "strategy {alg} needs GIRL/Dragonfly search, which arrives in Phase 5/6"
             ));
         }
     }
@@ -161,11 +161,13 @@ fn run(args: &Args) -> Result<(), String> {
     }
 
     if !args.forward_only && args.alg.is_none() {
-        println!("note: Phase 2 runs forward FESS only; reverse packing arrives in Phase 4.");
+        println!(
+            "note: Phase 4 runs strategy A by default; full 8-strategy scheduling arrives in Phase 6."
+        );
     }
     if let Some(cores) = args.cores {
         if cores > 1 {
-            println!("note: Phase 2 is single-threaded; ignoring -cores {cores}.");
+            println!("note: Phase 4 is single-threaded; ignoring -cores {cores}.");
         }
     }
     let _ = args.validate;
@@ -260,18 +262,30 @@ fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Re
         };
 
         let remaining = Duration::from_secs(args.time).saturating_sub(level_started.elapsed());
-        let config = FessConfig {
-            time_limit: if args.max_expansions.is_some() {
-                None
-            } else {
-                Some(remaining)
-            },
-            max_expansions: args.max_expansions,
-            log_max_nodes,
-            save_best: args.save_best,
-        };
 
-        let outcome = match solve_forward(&ctx, &config) {
+        let outcome = if args.forward_only {
+            let config = FessConfig {
+                time_limit: if args.max_expansions.is_some() {
+                    None
+                } else {
+                    Some(remaining)
+                },
+                max_expansions: args.max_expansions,
+                log_max_nodes,
+                save_best: args.save_best,
+            };
+            solve_forward(&ctx, &config)
+        } else {
+            let alg = args.alg.unwrap_or(0) as usize;
+            let config = StrategyConfig {
+                time_limit: remaining,
+                max_expansions: args.max_expansions,
+                log_max_nodes,
+                save_best: args.save_best,
+            };
+            solve_strategy(&ctx, alg, &config)
+        };
+        let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(err) => {
                 record_failure(

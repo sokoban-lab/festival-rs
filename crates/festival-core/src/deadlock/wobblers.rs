@@ -279,6 +279,16 @@ fn wobbler_deadlock_search(
     Ok(res)
 }
 
+/// Port of `start_zone_is_deadlocked`: an uncached wobblers search bounded at
+/// 1000 positions, used on the roots of the reverse packing forest.
+pub fn start_zone_is_deadlocked(
+    ctx: &LevelContext,
+    state: &mut DeadlockState,
+    board: &Board,
+) -> Result<bool> {
+    Ok(wobblers_search_actual(ctx, state, board, true, 1000)? == IS_DEADLOCK)
+}
+
 pub fn is_wobblers_deadlock(
     ctx: &LevelContext,
     state: &mut DeadlockState,

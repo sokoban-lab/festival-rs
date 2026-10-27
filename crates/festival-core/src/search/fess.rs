@@ -3,9 +3,7 @@
 
 //! FESS main loop (`engine.cpp`).
 //!
-//! Phase 2 runs the forward search only. Mode-specific hooks (GIRL, cycle
-//! deadlock, learned patterns, REV) are intentionally absent rather than
-//! silently approximated.
+//! Works for every Phase 4 forward mode; GIRL and Dragonfly stay for Phase 5.
 
 use std::time::Duration;
 
@@ -15,6 +13,7 @@ use crate::deadlock::oracle::move_is_deadlocked;
 use crate::error::{Result, SolveError};
 use crate::moves::{Move, apply_move};
 use crate::search::helper::Helper;
+use crate::search::hf;
 use crate::search::perimeter::Perimeter;
 use crate::search::tree::{ExpansionId, NONE_EXPANSION, Tree};
 use crate::solver::LevelContext;
@@ -98,7 +97,7 @@ fn has_winning_move(
     }
 
     let new_root = tree.set_root(ctx, board, helper)?;
-    tree.set_advisors_and_weights(new_root, ctx, helper);
+    tree.set_advisors_and_weights(new_root, ctx, helper)?;
 
     tree.expansions[new_root as usize].father = expansion;
     tree.expansions[new_root as usize].depth = tree.expansions[expansion as usize].depth + 1;
@@ -109,10 +108,36 @@ fn has_winning_move(
     Ok(true)
 }
 
+/// Creates a private tree and runs one forward search. Used by tests and the
+/// forward-only development path.
 pub fn run_fess(
     ctx: &LevelContext,
     config: &FessConfig,
     search_mode: SearchMode,
+) -> Result<FessRun> {
+    let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
+    tree.prepare_deadlock(ctx)?;
+    let mut helper = Helper::default();
+    let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
+    run_fess_into(
+        ctx,
+        config,
+        search_mode,
+        &mut tree,
+        &mut helper,
+        &mut perimeter,
+    )
+}
+
+/// Runs a forward FESS search on an existing tree. The deadline in `config`
+/// is relative to this call.
+pub fn run_fess_into(
+    ctx: &LevelContext,
+    config: &FessConfig,
+    search_mode: SearchMode,
+    tree: &mut Tree,
+    helper: &mut Helper,
+    perimeter: &mut Perimeter,
 ) -> Result<FessRun> {
     if config.time_limit == Some(Duration::ZERO) {
         return Ok(FessRun {
@@ -124,23 +149,27 @@ pub fn run_fess(
         });
     }
 
+    if search_mode == SearchMode::GirlSearch {
+        return Err(SolveError::Internal(
+            "GIRL_SEARCH is not implemented before Phase 5".into(),
+        ));
+    }
+
     let clock = SearchClock::new(config.time_limit, config.max_expansions);
-    let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
-    tree.prepare_deadlock(ctx)?;
-    let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
-    let mut helper = Helper::default();
+    helper.init_scored_distance(ctx, &ctx.level.board, false);
 
     tree.reset();
     tree.pull_mode = false;
     tree.search_mode = search_mode;
-    helper.reset();
+
+    helper.begin_search();
 
     if perimeter.is_in(ctx.level.board.hash(), 1).is_some() {
         helper.enable_inefficient_moves = true;
     }
 
-    let mut new_node = tree.set_root(ctx, ctx.level.board, &mut helper)?;
-    tree.set_advisors_and_weights(new_node, ctx, &mut helper);
+    let mut new_node = tree.set_root(ctx, ctx.level.board, helper)?;
+    tree.set_advisors_and_weights(new_node, ctx, helper)?;
     tree.expansions[new_node as usize].best_past = tree.expansions[new_node as usize].node;
 
     let mut best_so_far = new_node;
@@ -149,9 +178,9 @@ pub fn run_fess(
     helper.requests.clear();
     helper.requests.add_request(&root_score)?;
     let label = helper.requests.label_of_score(&root_score, false);
-    tree.add_label_to_last_node(label, ctx, &mut helper)?;
+    tree.add_label_to_last_node(label, ctx, helper)?;
 
-    perimeter.insert_node(&tree, new_node, true);
+    perimeter.insert_node(ctx, tree, new_node, true);
 
     let mut solved = false;
     let mut expansion_count = 0u64;
@@ -183,12 +212,6 @@ pub fn run_fess(
                 .request_of_score(&score)
                 .ok_or_else(|| SolveError::Internal("missing request".into()))?
         };
-
-        if search_mode == SearchMode::GirlSearch && !helper.perimeter_found {
-            return Err(SolveError::Internal(
-                "GIRL_SEARCH is not implemented in Phase 2".into(),
-            ));
-        }
 
         let label = helper.requests.label_of_request(&request);
         if !(0..MAX_TREE_LABELS as i32).contains(&label) {
@@ -228,15 +251,15 @@ pub fn run_fess(
         }
 
         expansion_count += 1;
-        let child = tree.expand_node(ctx, expanded_node, tree_son as usize, &mut helper)?;
-        tree.set_advisors_and_weights(child, ctx, &mut helper);
+        let child = tree.expand_node(ctx, expanded_node, tree_son as usize, helper)?;
+        tree.set_advisors_and_weights(child, ctx, helper)?;
         new_node = child;
 
         let past = tree.expansions[new_node as usize].best_past;
         let past_score = tree.nodes[past as usize].score;
         helper.requests.add_request(&past_score)?;
         let label = helper.requests.label_of_score(&past_score, false);
-        tree.add_label_to_last_node(label, ctx, &mut helper)?;
+        tree.add_label_to_last_node(label, ctx, helper)?;
 
         if tree.best_so_far_is_better(best_so_far, new_node) {
             best_so_far = new_node;
@@ -247,7 +270,7 @@ pub fn run_fess(
             break;
         }
 
-        check_cycle_deadlock(&mut tree, best_so_far, ctx);
+        check_cycle_deadlock(tree, best_so_far, ctx);
 
         if tree.nodes[tree.expansions[best_so_far as usize].node as usize].deadlocked {
             match tree.best_node_in_tree() {
@@ -264,7 +287,7 @@ pub fn run_fess(
             break;
         }
 
-        if has_winning_move(&mut tree, new_node, ctx, &mut helper)? {
+        if has_winning_move(tree, new_node, ctx, helper)? {
             new_node = tree
                 .last_expansion()
                 .ok_or_else(|| SolveError::Internal("missing winning node".into()))?;
@@ -274,14 +297,14 @@ pub fn run_fess(
 
         tree.learn_from_subtrees(ctx, new_node)?;
 
-        if tree.check_if_perimeter_reached(&perimeter, ctx, &mut helper) {
+        if tree.check_if_perimeter_reached(perimeter, ctx, helper) {
             let past = tree.expansions[new_node as usize].best_past;
             let score = tree.nodes[past as usize].score;
             helper.requests.set_next_request_to_score(&score);
         }
 
         if !helper.perimeter_found {
-            perimeter.insert_node(&tree, new_node, true);
+            perimeter.insert_node(ctx, tree, new_node, true);
         }
     }
 
@@ -297,9 +320,14 @@ pub fn run_fess(
 
     if let Some(node) = solved_node {
         if node != NONE_EXPANSION {
-            tree.store_solution(node, &mut helper)?;
+            tree.store_solution(node, helper)?;
             moves = helper.sol_moves.clone();
         }
+    }
+
+    if search_mode == SearchMode::RevSearch {
+        let board = tree.expansion_board(best_so_far)?;
+        hf::setup_rev_board(ctx, &tree.deadlock, &board, helper)?;
     }
 
     let elapsed = clock.elapsed();
@@ -358,6 +386,7 @@ mod tests {
         tree.pull_mode = false;
         tree.search_mode = SearchMode::Normal;
         let mut helper = Helper::default();
+        helper.init_scored_distance(&ctx, &ctx.level.board, false);
         let root = tree.set_root(&ctx, ctx.level.board, &mut helper).unwrap();
         assert!(tree.expansions[root as usize].moves_num > 0);
 
@@ -366,7 +395,7 @@ mod tests {
         let mut solved = ctx.level.board;
         solved.and_not(1, 1, crate::constants::SOKOBAN);
         solved.or(1, 3, crate::constants::SOKOBAN);
-        let node = tree.add_board_to_tree(&ctx, &solved).unwrap();
+        let node = tree.add_board_to_tree(&ctx, &helper, &solved).unwrap();
         assert_eq!(
             tree.nodes[node as usize].score.boxes_on_targets,
             ctx.level.box_count as i16

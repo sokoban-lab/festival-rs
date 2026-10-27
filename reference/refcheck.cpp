@@ -23,9 +23,18 @@
 #include "deadlock_utils.h"
 #include "preprocess.h"
 #include "io.h"
+#include "packing_search.h"
+#include "tree.h"
+#include "util.h"
 
 void allocate_deadlock_cache();
 void read_deadlock_patterns(int pull_mode);
+extern tree search_trees[8];
+extern helper helpers[8];
+void allocate_search_trees();
+void free_search_trees();
+void allocate_helpers();
+void free_helpers();
 int preprocess_level(board b);
 int board_is_deadlocked(board b, int pull_mode, int search_mode);
 int advanced_deadlock_pull_mode(board b_in, int without_wobblers);
@@ -403,8 +412,87 @@ static int run_explain(int argc, char** argv)
 	return 0;
 }
 
+static int run_plan(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	int strategy_index = atoi(argv[4]);
+	int log_nodes = atoi(argv[5]);
+	int backward_search_type[8] =
+	{
+		BASE_SEARCH,
+		MAX_DIST_SEARCH2,
+		GIRL_SEARCH,
+		HF_SEARCH,
+		BICON_SEARCH,
+		MAX_DIST_SEARCH,
+		REV_SEARCH,
+		DRAGONFLY
+	};
+	tree *t;
+	helper *h;
+	board start;
+	board b;
+
+	if (strategy_index < 0 || strategy_index >= 8)
+	{
+		fprintf(stderr, "strategy must be 0..7\n");
+		return 2;
+	}
+	if (backward_search_type[strategy_index] == REV_SEARCH ||
+		backward_search_type[strategy_index] == GIRL_SEARCH ||
+		backward_search_type[strategy_index] == DRAGONFLY)
+	{
+		fprintf(stderr, "strategy has no packing plan\n");
+		return 2;
+	}
+
+	verbose = 0;
+	cores_num = 1;
+	time_limit = 3600;
+	start_time = (int)time(0);
+	setvbuf(stdout, NULL, _IONBF, 0);
+
+	strcpy(global_level_set_name, levels);
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	// The tree size is the fixed expansion budget for the comparison; the
+	// perimeter and deadlock caches keep the default solver sizes.
+	extra_mem = log_nodes - 23;
+	allocate_search_trees();
+	allocate_helpers();
+	t = search_trees;
+	h = helpers;
+	h->weighted_search = 1;
+
+	copy_board(start, b);
+	packing_search(b, time_limit, backward_search_type[strategy_index], t, h);
+
+	printf("expansions %d\n", t->expansions_num);
+	printf("plan %d\n", h->parking_order_num);
+	for (int i = 0; i < h->parking_order_num; i++)
+		printf("%d %d %d\n",
+			h->parking_order[i].from,
+			h->parking_order[i].to,
+			h->parking_order[i].until);
+
+	free_helpers();
+	free_search_trees();
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
+	// The solver's main() processes -cores/-extra_mem before allocating the
+	// perimeter and caches; refcheck has no such flags, so fix them here.
+	cores_num = 1;
+	extra_mem = 0;
+
 	if (argc >= 5 && strcmp(argv[1], "explain") == 0)
 	{
 		allocate_perimeter();
@@ -423,7 +511,17 @@ int main(int argc, char** argv)
 		return run_deadlock(argc, argv);
 	}
 
+	if (argc >= 6 && strcmp(argv[1], "plan") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_plan(argc, argv);
+	}
+
 	fprintf(stderr,
-		"usage: refcheck deadlock <levels.sok> <level> <samples> <move_samples> <seed> <out_prefix>\n");
+		"usage: refcheck deadlock <levels.sok> <level> <samples> <move_samples> <seed> <out_prefix>\n"
+		"       refcheck plan <levels.sok> <level> <strategy> <log_nodes>\n");
 	return 2;
 }

@@ -11,8 +11,11 @@ use crate::board::Board;
 use crate::constants::*;
 use crate::error::{Result, SolveError};
 use crate::moves::{Move, MoveAttr, apply_move, attr_to_weight};
+use crate::planning::imagine as imagine_planning;
 use crate::search::advisors::{AdvisorsElement, is_an_advisor, set_advisors_inner};
 use crate::search::helper::Helper;
+use crate::search::hf;
+use crate::search::max_dist::set_max_dist_data_in_node;
 use crate::search::perimeter::Perimeter;
 use crate::search::queue::IndexedHeap;
 use crate::search::score::{ScoreElement, is_better_score, score_board};
@@ -205,8 +208,13 @@ impl Tree {
         self.find_node_by_hash(board.hash()).is_some()
     }
 
-    pub fn add_board_to_tree(&mut self, ctx: &LevelContext, board: &Board) -> Result<NodeId> {
-        let score = score_board(ctx, board, self.pull_mode, self.search_mode);
+    pub fn add_board_to_tree(
+        &mut self,
+        ctx: &LevelContext,
+        helper: &Helper,
+        board: &Board,
+    ) -> Result<NodeId> {
+        let score = score_board(ctx, helper, board, self.pull_mode, self.search_mode);
         self.add_node_to_tree(board.hash(), score)
     }
 
@@ -251,7 +259,7 @@ impl Tree {
     ) -> Result<ExpansionId> {
         let nodes_before_expansion = self.nodes.len();
         let hash = board.hash();
-        let score = score_board(ctx, &board, self.pull_mode, self.search_mode);
+        let score = score_board(ctx, helper, &board, self.pull_mode, self.search_mode);
 
         let node = match self.find_node_by_hash(hash) {
             Some(node) => {
@@ -334,7 +342,7 @@ impl Tree {
                 deadlocked: false,
             });
             if self.find_node_by_hash(hash).is_none() {
-                let score = score_board(ctx, &child, self.pull_mode, self.search_mode);
+                let score = score_board(ctx, helper, &child, self.pull_mode, self.search_mode);
                 self.add_node_to_tree(hash, score)?;
             }
         }
@@ -544,16 +552,23 @@ impl Tree {
         }
     }
 
+    /// Port of `set_advisors_and_weights_to_last_node`: score hooks, advisors,
+    /// move weights and the node's best move.
     pub fn set_advisors_and_weights(
         &mut self,
         expansion: ExpansionId,
-        _ctx: &LevelContext,
+        ctx: &LevelContext,
         helper: &mut Helper,
-    ) {
+    ) -> Result<()> {
+        set_max_dist_data_in_node(self, ctx, expansion)?;
+        self.set_imagine_data_in_node(expansion, ctx, helper)?;
+
         let (node, start, count) = {
             let e = &self.expansions[expansion as usize];
             (e.node, e.move_hash_place, e.moves_num as usize)
         };
+        let board = self.expansion_board(expansion)?;
+        let base_score = self.nodes[node as usize].score;
 
         let mut moves = Vec::with_capacity(count);
         let mut scores = Vec::with_capacity(count);
@@ -571,13 +586,17 @@ impl Tree {
         }
 
         let advisors = set_advisors_inner(
-            &self.nodes[node as usize].score,
+            ctx,
+            helper,
+            &mut self.deadlock,
+            &board,
+            &base_score,
             &moves,
             &scores,
             self.pull_mode,
             self.search_mode,
             &already_expanded,
-        );
+        )?;
         self.expansions[expansion as usize].advisors = advisors;
 
         for i in 0..count {
@@ -607,7 +626,113 @@ impl Tree {
             }
         }
 
-        self.set_best_move(expansion, _ctx);
+        self.set_best_move(expansion, ctx);
+        Ok(())
+    }
+
+    /// Port of `set_imagine_data_in_node`.
+    fn set_imagine_data_in_node(
+        &mut self,
+        expansion: ExpansionId,
+        ctx: &LevelContext,
+        helper: &Helper,
+    ) -> Result<()> {
+        if self.search_mode == SearchMode::RevSearch && self.pull_mode {
+            let (node, start, count) = {
+                let e = &self.expansions[expansion as usize];
+                (e.node, e.move_hash_place, e.moves_num as usize)
+            };
+            let board = self.expansion_board(expansion)?;
+            let mut moves = Vec::with_capacity(count);
+            let mut scores = Vec::with_capacity(count);
+            for i in 0..count {
+                moves.push(self.move_hashes[start + i].move_data);
+                scores.push(
+                    self.get_score_of_hash(self.move_hashes[start + i].hash)
+                        .unwrap_or_default(),
+                );
+            }
+
+            let mut base_score = self.nodes[node as usize].score;
+            hf::set_rev_distance(ctx, helper, &board, &mut base_score, &moves, &mut scores);
+            self.nodes[node as usize].score = base_score;
+            for (i, score) in scores.iter().enumerate() {
+                let hash = self.move_hashes[start + i].hash;
+                let Some(place) = self.find_node_by_hash(hash) else {
+                    continue;
+                };
+                self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
+            }
+            return Ok(());
+        }
+
+        if self.pull_mode {
+            return Ok(());
+        }
+        if matches!(
+            self.search_mode,
+            SearchMode::GirlSearch
+                | SearchMode::NaiveSearch
+                | SearchMode::RevSearch
+                | SearchMode::ForwardWithBases
+        ) {
+            return Ok(());
+        }
+
+        let (node, start, count) = {
+            let e = &self.expansions[expansion as usize];
+            (e.node, e.move_hash_place, e.moves_num as usize)
+        };
+        let board = self.expansion_board(expansion)?;
+
+        let imagined = if self.search_mode == SearchMode::Normal {
+            if helper.imagine.is_none() || helper.parking_order.len() != ctx.level.box_count {
+                return Ok(());
+            }
+            imagine_planning::get_imagined_board(ctx, &board, helper)?.0
+        } else {
+            helper.imagined_hf_board
+        };
+
+        let mut moves = Vec::with_capacity(count);
+        let mut scores = Vec::with_capacity(count);
+        for i in 0..count {
+            moves.push(self.move_hashes[start + i].move_data);
+            scores.push(
+                self.get_score_of_hash(self.move_hashes[start + i].hash)
+                    .unwrap_or_default(),
+            );
+        }
+
+        let mut base_score = self.nodes[node as usize].score;
+        crate::analysis::match_distance::compute_imagine_distance(
+            &ctx.level,
+            &ctx.distances,
+            &board,
+            &imagined,
+            &mut base_score,
+            &moves,
+            &mut scores,
+            self.search_mode,
+        );
+        self.nodes[node as usize].score = base_score;
+
+        for (i, score) in scores.iter().enumerate() {
+            let hash = self.move_hashes[start + i].hash;
+            let Some(place) = self.find_node_by_hash(hash) else {
+                continue;
+            };
+            self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
+        }
+
+        Ok(())
+    }
+
+    /// Marks a son as unusable without touching its node (`remove_son_from_tree`).
+    pub fn remove_son_from_tree(&mut self, ctx: &LevelContext, expansion: ExpansionId, son: usize) {
+        let index = self.expansions[expansion as usize].move_hash_place + son;
+        self.move_hashes[index].deadlocked = true;
+        self.set_deadlock_status(expansion, ctx);
     }
 
     fn best_move_is_available(&mut self, expansion: ExpansionId) -> bool {

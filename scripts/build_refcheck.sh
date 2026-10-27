@@ -27,5 +27,8 @@ done
 "$CXX" -O3 -DTHREADS -I reference/cpp-shim -I "$UPSTREAM" \
     -c reference/refcheck.cpp -o "$OBJ/refcheck.o"
 
-"$CXX" "$OBJ"/*.o -o "$OUT"
+# `plan` calls packing_search outside the solver's usual entry path; the
+# default 1 MB main-thread stack is not enough for the advisor scratch arrays
+# at -O3, so give refcheck extra headroom. This does not change solver logic.
+"$CXX" "$OBJ"/*.o -Wl,/STACK:8388608 -o "$OUT"
 echo "built $OUT"

@@ -4,7 +4,6 @@
 //! Immutable per-level analysis shared by all search threads.
 
 use crate::analysis::{self, Hotspots, Rooms};
-use crate::constants::{INF, MAX_INNER};
 use crate::distance::{self, Distances};
 use crate::error::Result;
 use crate::level::Level;
@@ -15,8 +14,6 @@ pub struct LevelContext {
     pub distances: Distances,
     pub rooms: Rooms,
     pub hotspots: Hotspots,
-    /// Push distance from each cell to the nearest target (`scored_distance`).
-    pub scored_distance: [u32; MAX_INNER],
 }
 
 impl LevelContext {
@@ -27,15 +24,11 @@ impl LevelContext {
         let rooms = analysis::rooms::analyse(&level, &level.board)?;
         let hotspots = analysis::hotspot::init(&level, &distances, clock.hotspot_abort_at());
 
-        let mut scored_distance = [INF; MAX_INNER];
-        distance::get_distance_from_targets(&level, &level.board, &mut scored_distance);
-
         Ok(Self {
             level,
             distances,
             rooms,
             hotspots,
-            scored_distance,
         })
     }
 }

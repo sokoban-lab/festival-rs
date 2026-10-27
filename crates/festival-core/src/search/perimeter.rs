@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 
 use crate::constants::SearchMode;
+use crate::moves::apply_move;
 use crate::search::tree::Tree;
+use crate::solver::LevelContext;
 
 #[derive(Clone, Copy, Debug)]
 struct Entry {
@@ -84,15 +86,63 @@ impl Perimeter {
         self.total_entries += 1;
     }
 
+    /// Port of `get_hash_without_bases`: BASE_SEARCH perimeter entries ignore
+    /// the base markers so they can meet the forward search's plain boards.
+    fn hash_without_bases(
+        ctx: &LevelContext,
+        tree: &Tree,
+        expansion: u32,
+        son: Option<usize>,
+    ) -> u64 {
+        let e = &tree.expansions[expansion as usize];
+        if tree.nodes[e.node as usize].score.boxes_in_level != ctx.level.box_count as i16 {
+            return u64::MAX;
+        }
+
+        let mut board = match tree.expansion_board(expansion) {
+            Ok(board) => board,
+            Err(_) => return u64::MAX,
+        };
+
+        if let Some(son) = son {
+            let hash = tree.move_hashes[e.move_hash_place + son].hash;
+            let Some(place) = tree.find_node_by_hash(hash) else {
+                return u64::MAX;
+            };
+            if tree.nodes[place as usize].score.boxes_in_level != ctx.level.box_count as i16 {
+                return u64::MAX;
+            }
+            apply_move(
+                &mut board,
+                &tree.move_hashes[e.move_hash_place + son].move_data,
+                SearchMode::Normal,
+                &ctx.level,
+            );
+        }
+
+        board.clear_bases_inplace();
+        board.hash()
+    }
+
     /// Port of `insert_node_into_perimeter`; returns the number of inserted
     /// entries (including updates), like the C++ counter.
-    pub fn insert_node(&mut self, tree: &Tree, expansion: u32, with_sons: bool) -> usize {
+    pub fn insert_node(
+        &mut self,
+        ctx: &LevelContext,
+        tree: &Tree,
+        expansion: u32,
+        with_sons: bool,
+    ) -> usize {
         if self.is_full() {
             return 0;
         }
 
         let e = &tree.expansions[expansion as usize];
-        let node_hash = tree.nodes[e.node as usize].hash;
+        let node_hash = if tree.search_mode == SearchMode::BaseSearch {
+            Self::hash_without_bases(ctx, tree, expansion, None)
+        } else {
+            tree.nodes[e.node as usize].hash
+        };
         let side = tree.pull_mode as u8;
         let alg = tree.search_mode as u8;
 
@@ -106,7 +156,11 @@ impl Perimeter {
 
         let start = e.move_hash_place;
         for offset in 0..e.moves_num as usize {
-            let hash = tree.move_hashes[start + offset].hash;
+            let hash = if tree.search_mode == SearchMode::BaseSearch {
+                Self::hash_without_bases(ctx, tree, expansion, Some(offset))
+            } else {
+                tree.move_hashes[start + offset].hash
+            };
             self.store(hash, (e.depth + 1) as u16, side, alg);
             count += 1;
         }

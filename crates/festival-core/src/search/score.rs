@@ -3,13 +3,14 @@
 
 //! Score payload and comparison (`score.h` / `score.cpp`).
 //!
-//! Phase 2 implements the `NORMAL` / `FORWARD_WITH_BASES` family. Planning
-//! features (`packed_boxes`, `out_of_plan`, `imagine`, `overlap`) stay at zero
-//! until Phase 4; their score fields exist so later phases can fill them
-//! without changing the tree layout.
+//! Phase 4 adds the HF / BICON / MAX_DIST / REV families and the planning
+//! features (`packed_boxes`, `out_of_plan`, `imagine`, `dist_to_imagined`).
 
 use crate::board::Board;
 use crate::constants::SearchMode;
+use crate::planning::{imagine, oop, park_order};
+use crate::search::helper::Helper;
+use crate::search::hf;
 use crate::solver::LevelContext;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -29,16 +30,39 @@ pub struct ScoreElement {
     pub biconnect: i16,
 }
 
-/// Port of `is_better_score` for the modes implemented so far.
-///
-/// Other search modes are not reachable from the Phase 2 solver; callers must
-/// pass `NORMAL` (or the two base modes, which share its comparison order).
+/// Port of `is_better_score`.
 pub fn is_better_score(
     new_score: &ScoreElement,
     old_score: &ScoreElement,
     pull_mode: bool,
-    _search_mode: SearchMode,
+    search_mode: SearchMode,
 ) -> bool {
+    if matches!(
+        search_mode,
+        SearchMode::HfSearch
+            | SearchMode::BiconSearch
+            | SearchMode::MaxDistSearch
+            | SearchMode::MaxDistSearch2
+    ) {
+        return hf::is_better_hf_score(new_score, old_score, pull_mode);
+    }
+
+    if search_mode == SearchMode::RevSearch {
+        return hf::is_better_rev_score(new_score, old_score, pull_mode);
+    }
+
+    // GIRL / SNAIL / NETLOCK / NAIVE / K_DIST comparators belong to Phase 5/6.
+    if matches!(
+        search_mode,
+        SearchMode::GirlSearch
+            | SearchMode::SnailSearch
+            | SearchMode::NetlockSearch
+            | SearchMode::NaiveSearch
+            | SearchMode::KDistSearch
+    ) {
+        return false;
+    }
+
     if new_score.boxes_in_level < old_score.boxes_in_level {
         return true;
     }
@@ -123,23 +147,24 @@ pub fn is_better_score(
     false
 }
 
-/// Sum of the per-cell push distance for every box (`get_scored_distance`).
-pub fn get_scored_distance(ctx: &LevelContext, board: &Board) -> i32 {
+/// Sum of the per-cell scored distance for every box (`get_scored_distance`).
+pub fn get_scored_distance(helper: &Helper, board: &Board) -> i32 {
     let mut sum = 0i32;
     for y in 0..board.height() {
         for x in 0..board.width() {
             if board.cell(y, x) & crate::constants::BOX == 0 {
                 continue;
             }
-            sum += ctx.scored_distance[Board::flat_index(y, x)] as i32;
+            sum += helper.scored_distance[Board::flat_index(y, x)] as i32;
         }
     }
     sum
 }
 
-/// Port of `score_board` restricted to `NORMAL` / base modes.
+/// Port of `score_board`.
 pub fn score_board(
     ctx: &LevelContext,
+    helper: &Helper,
     board: &Board,
     pull_mode: bool,
     search_mode: SearchMode,
@@ -153,12 +178,22 @@ pub fn score_board(
     };
 
     match search_mode {
-        SearchMode::Normal | SearchMode::BaseSearch | SearchMode::ForwardWithBases => {}
+        SearchMode::KDistSearch | SearchMode::XySearch | SearchMode::MiniSearch => {
+            return score;
+        }
         SearchMode::DeadlockSearch => {
             score.hotspots = crate::deadlock::zone::size_of_deadlock_zone(board) as i16;
             return score;
         }
-        SearchMode::KDistSearch | SearchMode::XySearch | SearchMode::MiniSearch => {
+        SearchMode::RevSearch => {
+            hf::set_score_in_rev_mode(ctx, helper, board, &mut score, pull_mode);
+            return score;
+        }
+        SearchMode::HfSearch
+        | SearchMode::BiconSearch
+        | SearchMode::MaxDistSearch
+        | SearchMode::MaxDistSearch2 => {
+            hf::fill_hf_scores(ctx, helper, board, &mut score, pull_mode, search_mode);
             return score;
         }
         SearchMode::WobblersSearch | SearchMode::RoomsDeadlockSearch => {
@@ -169,24 +204,23 @@ pub fn score_board(
             };
             return score;
         }
-        // Feature-specific scoring is Phase 4/5. Keep a deterministic base
-        // score instead of inventing semantics.
+        SearchMode::Normal | SearchMode::BaseSearch | SearchMode::ForwardWithBases => {}
+        // GIRL / NAIVE / SNAIL / NETLOCK are Phase 5/6; keep the base score
+        // instead of inventing semantics.
         _ => return score,
     }
 
     score.rooms_score = ctx.rooms.score(level, board) as i16;
+    score.dist_to_targets = get_scored_distance(helper, board);
+
     if pull_mode {
-        // Pull-mode scored distance needs the reverse helper matrix; the
-        // forward Phase 2 search does not use it.
-        score.dist_to_targets = 0;
         return score;
     }
 
-    score.dist_to_targets = get_scored_distance(ctx, board);
-    score.packed_boxes = 0;
+    score.packed_boxes = park_order::score_parked_boxes(ctx, board, helper) as i16;
     score.hotspots = ctx.hotspots.score(level, board) as i16;
-    score.out_of_plan = 0;
-    score.imagine = 0;
+    score.out_of_plan = oop::get_out_of_plan_score(board, score.packed_boxes as i32, helper) as i16;
+    score.imagine = imagine::imagine_score(ctx, board, search_mode, helper) as i16;
     score
 }
 
@@ -237,14 +271,25 @@ mod tests {
     #[test]
     fn push_scored_distance_counts_pushes_to_targets() {
         let ctx = context("#######\n#@ $ .#\n#######\n");
+        let mut helper = Helper::default();
+        helper.init_scored_distance(&ctx, &ctx.level.board, false);
         // One box two pushes away from the target.
-        assert_eq!(get_scored_distance(&ctx, &ctx.level.board), 2);
+        assert_eq!(get_scored_distance(&helper, &ctx.level.board), 2);
+    }
+
+    #[test]
+    fn pull_scored_distance_sums_push_distance_to_targets() {
+        let ctx = context("#######\n#@ $ .#\n#######\n");
+        let mut helper = Helper::default();
+        helper.init_scored_distance(&ctx, &ctx.level.board, true);
+        assert_eq!(get_scored_distance(&helper, &ctx.level.board), 2);
     }
 
     #[test]
     fn board_score_tracks_packed_boxes() {
         let ctx = context("#######\n#@ $ .#\n#######\n");
-        let score = score_board(&ctx, &ctx.level.board, false, SearchMode::Normal);
+        let helper = Helper::default();
+        let score = score_board(&ctx, &helper, &ctx.level.board, false, SearchMode::Normal);
         assert_eq!(score.boxes_in_level, 1);
         assert_eq!(score.boxes_on_targets, 0);
         assert!(score.connectivity >= 2);
