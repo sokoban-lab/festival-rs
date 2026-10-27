@@ -13,7 +13,7 @@ before the next one starts.
 |---|---|---|
 | Phase 0 | complete | workspace, CLI, smoke set, LURD validator, CI |
 | Phase 1 | complete | board, `.sok` parser, preprocessing, BFS, box graph, push/pull distances, rooms, hotspots, holes, biconnectivity, fixed boxes, Hungarian matching |
-| Phase 2 | complete (forward-only) | arena tree, indexed heap, FESS requests/scores/advisors, static deadlock oracle, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
+| Phase 2 | complete (forward-only, Gate G2) | arena tree, indexed heap, FESS requests/scores/advisors, unified deadlock oracle, cyclic `has_winning_move`, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
 | Phase 3+ | not started | full deadlock subsystem, packing/planning, GIRL/Dragonfly, multi-core scheduling |
 
 The CLI now solves levels with a single-threaded **forward** FESS search
@@ -51,6 +51,24 @@ cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 --analyse --dump
 cargo run -p festival-bench -- levels/smoke/smoke.sok
 ```
 
+Reproduce the Gate G2 measurements (Microban I, 155 vendored levels):
+
+```sh
+scripts/run_g2.sh
+cargo test -p festival-core --test corpus -- --ignored --nocapture
+cargo run -p festival-bench -- verify-solutions levels/corpus/microban.xsb out/solutions.sok
+```
+
+Build the upstream C++ baseline for differential runs (requires a sibling
+`festival` checkout, or set `FESTIVAL_CPP_DIR`):
+
+```sh
+scripts/build_cpp_ref.sh
+```
+
+Baseline commands, recorded results and per-level quality differences are in
+[`reference/BASELINE.md`](reference/BASELINE.md).
+
 Original single-dash options (`-level`, `-from`, `-to`, `-out_dir`, `-time`,
 `-out_file`, `-save_best`, `-cores`, `-alg`, `-extra_mem`) and the new
 `--max-expansions`, `--forward-only`, `--validate`, `--analyse`,
@@ -74,14 +92,16 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/graph.rs           push/pull box-move graph
   src/distance.rs        distance matrices and impossible places
   src/analysis/          rooms, hotspots, holes, biconnectivity, matching
-  src/deadlock/          static patterns, 2x2/3x3/freeze oracle
+  src/deadlock/          unified oracle, static patterns, 2x2/3x3/freeze
   src/search/            tree, heap, requests, scores, advisors, FESS loop
   src/io/lurd.rs         independent LURD replay validator
   src/io/solution.rs     player-path BFS, LURD and result files
 crates/festival-cli/     festival-rs binary
-crates/festival-bench/   static analysis CSV driver
+crates/festival-bench/   static analysis CSV + solution verifier
 levels/smoke/            12 self-authored regression levels
-reference/               C++ baseline notes and future refcheck driver
+levels/corpus/           Microban I (155 levels, checksum + attribution)
+reference/               C++ baseline notes, pthread shim, refcheck driver
+scripts/                 corpus fetch, Gate G2, C++ baseline build
 ```
 
 ## Licensing

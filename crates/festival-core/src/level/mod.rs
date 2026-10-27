@@ -70,6 +70,22 @@ impl Level {
         indices
     }
 
+    /// Port of `is_cyclic_level`: every box already sits on a target.
+    ///
+    /// Such a level starts solved, but the root is excluded from the solved
+    /// check, so FESS searches for a cycle that reaches the solved state again.
+    pub fn is_cyclic(&self) -> bool {
+        for y in 0..self.initial.height() {
+            for x in 0..self.initial.width() {
+                let cell = self.initial.cell(y, x);
+                if cell == crate::constants::BOX || cell == crate::constants::TARGET {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn boxes_as_board(&self) -> crate::board::Board {
         let mut boxes = self.initial;
         for y in 0..boxes.height() {
@@ -106,5 +122,20 @@ impl Level {
             }
         }
         targets
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn level(text: &str) -> Level {
+        Level::preprocess(parse_levels(text).remove(0)).unwrap()
+    }
+
+    #[test]
+    fn detects_cyclic_levels() {
+        assert!(level("#######\n#@*   #\n#     #\n#######\n").is_cyclic());
+        assert!(!level("#######\n#@ $ .#\n#######\n").is_cyclic());
     }
 }

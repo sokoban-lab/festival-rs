@@ -9,13 +9,13 @@
 
 use std::time::Duration;
 
-use crate::constants::{MAX_TREE_LABELS, SearchMode};
-use crate::deadlock::oracle;
+use crate::constants::{MAX_TREE_LABELS, SearchMode, TARGET};
+use crate::deadlock::oracle::DeadlockOracle;
 use crate::error::{Result, SolveError};
-use crate::moves::Move;
+use crate::moves::{Move, apply_move};
 use crate::search::helper::Helper;
 use crate::search::perimeter::Perimeter;
-use crate::search::tree::{NONE_EXPANSION, Tree};
+use crate::search::tree::{ExpansionId, NONE_EXPANSION, Tree};
 use crate::solver::LevelContext;
 use crate::solver::clock::SearchClock;
 
@@ -49,6 +49,69 @@ pub struct FessRun {
     pub elapsed: Duration,
 }
 
+/// Port of `has_winning_move` (`engine.cpp`).
+///
+/// In a cyclic level the solved position may already be in the tree (usually
+/// as the root), so `node_is_solved` never sees it as a new descendant. This
+/// detects the move that reaches such a node and re-roots the tree at a copy
+/// with the targets cleared, which keeps the hash distinct.
+fn has_winning_move(
+    tree: &mut Tree,
+    expansion: ExpansionId,
+    ctx: &LevelContext,
+    helper: &mut Helper,
+) -> Result<bool> {
+    if !ctx.level.is_cyclic() {
+        return Ok(false);
+    }
+
+    let (start, count) = {
+        let e = &tree.expansions[expansion as usize];
+        (e.move_hash_place, e.moves_num as usize)
+    };
+    let boxes_on_targets = ctx.level.box_count as i16;
+
+    let mut winning_son = None;
+    for son in 0..count {
+        let hash = tree.move_hashes[start + son].hash;
+        let node = tree
+            .find_node_by_hash(hash)
+            .ok_or_else(|| SolveError::Internal("has_winning_move: missing node".into()))?;
+        if tree.nodes[node as usize].score.boxes_on_targets == boxes_on_targets {
+            winning_son = Some(son);
+            break;
+        }
+    }
+
+    let Some(son) = winning_son else {
+        return Ok(false);
+    };
+
+    let mut board = tree.expansion_board(expansion)?;
+    let mv = tree.move_hashes[start + son].move_data;
+    apply_move(&mut board, &mv, SearchMode::Normal, &ctx.level);
+    for y in 0..board.height() {
+        for x in 0..board.width() {
+            board.and_not(y, x, TARGET);
+        }
+    }
+
+    let new_root = tree.set_root(ctx, board, helper)?;
+    tree.set_advisors_and_weights(new_root, ctx, helper);
+
+    tree.expansions[new_root as usize].father = expansion;
+    tree.expansions[new_root as usize].depth = tree.expansions[expansion as usize].depth + 1;
+
+    let new_hash = tree.nodes[tree.expansions[new_root as usize].node as usize].hash;
+    tree.move_hashes[start + son].hash = new_hash;
+
+    Ok(true)
+}
+
+/// Port hook for `learn_from_subtrees`; learned stuck patterns arrive with
+/// Phase 3, so the subtree-learning pass is intentionally empty.
+fn learn_from_subtrees(_tree: &Tree, _expansion: ExpansionId) {}
+
 pub fn run_fess(
     ctx: &LevelContext,
     config: &FessConfig,
@@ -65,6 +128,7 @@ pub fn run_fess(
     }
 
     let clock = SearchClock::new(config.time_limit, config.max_expansions);
+    let oracle = DeadlockOracle::new(&ctx.level);
     let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
     let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
     let mut helper = Helper::default();
@@ -154,7 +218,7 @@ pub fn run_fess(
         let played_move = tree.get_node_move(expanded_node, tree_son as usize);
 
         let board = tree.expansion_board(expanded_node)?;
-        if oracle::move_is_deadlocked(&ctx.level, &board, &played_move, false) {
+        if oracle.move_is_deadlocked(&board, &played_move, false) {
             tree.set_node_as_deadlocked(ctx, expanded_node, tree_son as usize)?;
             continue;
         }
@@ -193,6 +257,16 @@ pub fn run_fess(
             failure = Some(SolveError::ResourceExhausted);
             break;
         }
+
+        if has_winning_move(&mut tree, new_node, ctx, &mut helper)? {
+            new_node = tree
+                .last_expansion()
+                .ok_or_else(|| SolveError::Internal("missing winning node".into()))?;
+            solved = true;
+            break;
+        }
+
+        learn_from_subtrees(&tree, new_node);
 
         if tree.check_if_perimeter_reached(&perimeter, ctx, &mut helper) {
             let past = tree.expansions[new_node as usize].best_past;
@@ -266,6 +340,43 @@ mod tests {
             run.failure.map(|err| err.reason())
         );
         assert_eq!(run.moves.len(), 1);
+    }
+
+    #[test]
+    fn rewires_a_cyclic_winning_move() {
+        let ctx = context("#######\n#@*   #\n#     #\n#######\n");
+        assert!(ctx.level.is_cyclic());
+
+        let mut tree = Tree::new_with_level(10, &ctx.level).unwrap();
+        tree.reset();
+        tree.pull_mode = false;
+        tree.search_mode = SearchMode::Normal;
+        let mut helper = Helper::default();
+        let root = tree.set_root(&ctx, ctx.level.board, &mut helper).unwrap();
+        assert!(tree.expansions[root as usize].moves_num > 0);
+
+        // A second position with every box on a target, distinct from the
+        // root because the player stands elsewhere.
+        let mut solved = ctx.level.board;
+        solved.and_not(1, 1, crate::constants::SOKOBAN);
+        solved.or(1, 3, crate::constants::SOKOBAN);
+        let node = tree.add_board_to_tree(&ctx, &solved).unwrap();
+        assert_eq!(
+            tree.nodes[node as usize].score.boxes_on_targets,
+            ctx.level.box_count as i16
+        );
+
+        let place = tree.expansions[root as usize].move_hash_place;
+        tree.move_hashes[place].hash = solved.hash();
+
+        assert!(has_winning_move(&mut tree, root, &ctx, &mut helper).unwrap());
+        let last = tree.last_expansion().unwrap();
+        assert_eq!(tree.expansions[last as usize].father, root);
+        assert_eq!(tree.expansions[last as usize].depth, 1);
+        assert_eq!(
+            tree.move_hashes[place].hash,
+            tree.nodes[tree.expansions[last as usize].node as usize].hash
+        );
     }
 
     #[test]

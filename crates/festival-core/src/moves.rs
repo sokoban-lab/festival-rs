@@ -8,7 +8,7 @@ use crate::board::Board;
 use crate::constants::*;
 use crate::deadlock::direction::deadlock_in_direction;
 use crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls;
-use crate::deadlock::oracle::check_deadlock_in_moves;
+use crate::deadlock::oracle::DeadlockOracle;
 use crate::error::{Result, SolveError};
 use crate::graph::Graph;
 use crate::level::Level;
@@ -141,8 +141,12 @@ pub fn find_possible_moves(
             mv.pull = pull_mode;
         }
 
-        let valid =
-            check_deadlock_in_moves(level, &ctx.distances, &board, &scratch[..count], pull_mode);
+        let valid = DeadlockOracle::new(level).check_deadlock_in_moves(
+            &ctx.distances,
+            &board,
+            &scratch[..count],
+            pull_mode,
+        );
         let mut kept = 0usize;
         for i in 0..count {
             if valid[i] {

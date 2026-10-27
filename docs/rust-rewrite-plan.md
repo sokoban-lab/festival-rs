@@ -1237,19 +1237,28 @@ Festival 的难点不在代码量，而在**隐式语义**：全局状态、固�
 - `search/features.rs` + `search/advisors.rs`：环形 request 单元格、label 映射、NORMAL advisor（packed/connectivity/rooms/hotspots/out-of-plan）。
 - `search/score.rs`：`ScoreElement`、NORMAL 比较顺序、连通性/房间/热点/推送距离评分；`packed_boxes`、`out_of_plan`、`imagine` 按计划保留为 0。
 - `search/perimeter.rs`：基本前沿表与同向/反向更新语义（正向搜索中不会命中，为 Phase 4 预留）。
-- `deadlock/oracle.rs`：静态模式、2×2、freeze、3×3 与 `check_deadlock_in_moves`；corral、matching、MPDB2、k-dist、wobblers 明确未启用。
+- `deadlock/oracle.rs`：统一 `DeadlockOracle`，提供 `move_is_deadlocked`、`board_is_deadlocked`、`check_deadlock_in_moves`、`is_rooms_deadlock`；静态模式、2×2、freeze、3×3 已启用，corral、matching、MPDB2、k-dist、wobblers、rooms、cycle 通过 `UNIMPLEMENTED_CHECKS` 明确标注并保守返回 `false`。
 - `moves.rs`：`apply_move`、`find_possible_moves`、宏推生成、`deadlock_in_direction` 接入。
-- `search/fess.rs`：单线程正向 FESS 主循环、扩展预算/时钟、`DeadlockOracle` 接入、解提取。
+- `search/fess.rs`：单线程正向 FESS 主循环、扩展预算/时钟、`DeadlockOracle` 接入、`has_winning_move`（cyclic 关卡）、`learn_from_subtrees` 桩、解提取。
+- `search/tree.rs`：`block_existing_sons_tree`（GIRL 分支），保持与 C++ 相同的已展开子树屏蔽语义。
 - `io/solution.rs`：`find_sol_move`（玩家路径 BFS）、LURD 生成、`solutions.sok` / `times.txt` 格式化。
 - CLI：默认求解模式、`--analyse` 保留静态分析、`--max-expansions`、`-save_best`、`-out_file` YASC、`--validate`（始终启用）。
-- 测试：84 个单元测试 + 冒烟静态/求解集成测试；冒烟集 `--max-expansions` 模式下 12/12 解出，全部 LURD 通过独立回放校验。
+- 测试：87 个单元测试 + 冒烟/语料集成测试；冒烟集 12/12 解出，Microban 前 40 关 40/40，全部 LURD 通过独立回放校验。
 
 **Phase 2 有意保留的差异**
 
 - 仅实现正向 `NORMAL` 搜索；反向 packing、策略 1–7、HF/GIRL/Dragonfly、多核调度未接入。`-alg 1..7` 会显式报错，`-cores > 1` 会提示当前单线程。
-- 死锁剪枝只启用静态子集，解题率低于 C++；`packed_boxes` 等规划特征为 0，因此解可能合法但非最优（例如推数偏多）。
-- 当前机器仍无 C++ 基准（见 `reference/BASELINE.md`），未完成 `refcheck` 逐值/轨迹差分。
+- 死锁剪枝只启用静态子集；`packed_boxes` 等规划特征为 0，因此解可能合法但非最优（例如个别关卡推数偏多）。
+- `refcheck hash|static|deadlock|trace` 尚未实现；当前差分覆盖端到端解题结果与双方解的独立回放，逐节点 trace 对比留待 Phase 3/6。
 - `-extra_mem`/`--tree-log-size` 控制树容量，默认 `log2(nodes)=20`，低于 C++ 的 23，以免单次调试占用 >1 GB。
+
+**Gate G2 结果（2026-10-27）**
+
+- 冒烟集 12/12 可解析、12/12 解出。
+- Microban I 前 40 关，`-alg 0 -cores 1 -time 60`：Rust 40/40 解出，解全部通过独立回放；C++ 基准同为 40/40。
+- Microban I 前 100 关，1 秒预算：退出码 0，96/100 解出，无 panic/越界；release 模式 250 毫秒预算的库级复跑为 93/100。
+- C++ 差分（同样 60 秒、单核、`-alg 0`）：解集一致；总推数 638 vs 650（98.2%），总步数 2343 vs 2383（98.3%），均在 Gate 阈值内。详见 `reference/BASELINE.md`。
+- 语料：`levels/corpus/microban.xsb`（155 关，附校验和与许可说明）；`scripts/fetch_corpus.sh`、`scripts/run_g2.sh` 可复现上述结果；`festival-bench verify-solutions` 为独立 LURD 校验驱动。
 
 **下一阶段入口**
 

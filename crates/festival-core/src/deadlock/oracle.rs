@@ -16,6 +16,73 @@ use crate::distance::Distances;
 use crate::level::Level;
 use crate::moves::{Move, apply_move};
 
+/// Checks enabled in Phase 2. Every entry is conservative: it may miss a
+/// deadlock, never reject a live position.
+pub const IMPLEMENTED_CHECKS: &[&str] = &[
+    "embedded-patterns",
+    "2x2",
+    "3x3",
+    "freeze",
+    "fixed-box-walls",
+];
+
+/// Checks required by the full oracle but intentionally left for Phase 3.
+/// They currently return `false` (conservative) and are never approximated.
+pub const UNIMPLEMENTED_CHECKS: &[&str] = &[
+    "corral",
+    "matching",
+    "k-dist",
+    "wobblers",
+    "rooms",
+    "learned-patterns",
+    "cycle",
+];
+
+/// Unified deadlock interface used by the search (`advanced_deadlock.cpp`).
+///
+/// Phase 2 wires the statically sound subset through one entry point so that
+/// Phase 3 can replace individual checks without touching the FESS loop.
+pub struct DeadlockOracle<'a> {
+    level: &'a Level,
+}
+
+impl<'a> DeadlockOracle<'a> {
+    pub fn new(level: &'a Level) -> Self {
+        Self { level }
+    }
+
+    /// Port of `move_is_deadlocked`'s final stage. `is_rooms_deadlock` is
+    /// present so the call site already matches Phase 3; it reports `false`
+    /// until rooms deadlock lands (see [`UNIMPLEMENTED_CHECKS`]).
+    pub fn move_is_deadlocked(&self, board: &Board, mv: &Move, pull_mode: bool) -> bool {
+        move_is_deadlocked(self.level, board, mv, pull_mode)
+            || self.is_rooms_deadlock(board, mv, pull_mode)
+    }
+
+    pub fn board_is_deadlocked(&self, board: &Board, pull_mode: bool) -> bool {
+        board_is_deadlocked(self.level, board, pull_mode)
+    }
+
+    /// Port of `is_rooms_deadlock`. Phase 3b implements the room search; until
+    /// then this conservatively reports "not deadlocked".
+    pub fn is_rooms_deadlock(&self, _board: &Board, mv: &Move, _pull_mode: bool) -> bool {
+        if mv.kill || mv.base {
+            return false;
+        }
+        false
+    }
+
+    pub fn check_deadlock_in_moves(
+        &self,
+        distances: &Distances,
+        board: &Board,
+        moves: &[Move],
+        pull_mode: bool,
+    ) -> Vec<bool> {
+        check_deadlock_in_moves(self.level, distances, board, moves, pull_mode)
+    }
+}
+
 pub fn box_touches_unreachable_square(board: &Board, box_y: usize, box_x: usize) -> bool {
     for dir in 0..8 {
         let y = box_y as isize + DELTA_Y_8[dir];
@@ -342,6 +409,17 @@ mod tests {
             board.set(y, x, BOX);
         }
         assert!(is_2x2_deadlock_at_place(&board, 2, 2));
+    }
+
+    #[test]
+    fn oracle_marks_phase3_checks_as_unimplemented() {
+        let level = level("#######\n#@ $ .#\n#######\n");
+        let oracle = DeadlockOracle::new(&level);
+        let mv = Move::default();
+        assert!(!oracle.is_rooms_deadlock(&level.board, &mv, false));
+        assert!(!oracle.board_is_deadlocked(&level.board, false));
+        assert!(IMPLEMENTED_CHECKS.contains(&"freeze"));
+        assert!(UNIMPLEMENTED_CHECKS.contains(&"rooms"));
     }
 
     #[test]

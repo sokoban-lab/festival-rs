@@ -241,6 +241,7 @@ impl Tree {
         board: Board,
         helper: &mut Helper,
     ) -> Result<ExpansionId> {
+        let nodes_before_expansion = self.nodes.len();
         let hash = board.hash();
         let score = score_board(ctx, &board, self.pull_mode, self.search_mode);
 
@@ -280,6 +281,10 @@ impl Tree {
 
         self.fill_expansion_structures(ctx, id, helper)?;
         self.set_deadlock_status(id, ctx);
+
+        if self.search_mode == SearchMode::GirlSearch {
+            self.block_existing_sons_tree(id, nodes_before_expansion, ctx)?;
+        }
 
         Ok(id)
     }
@@ -676,6 +681,7 @@ impl Tree {
         son: usize,
         helper: &mut Helper,
     ) -> Result<ExpansionId> {
+        let nodes_before_expansion = self.nodes.len();
         let (parent_start, parent_depth, parent_weight, parent_best_past) = {
             let e = &self.expansions[parent as usize];
             (e.move_hash_place, e.depth, e.weight, e.best_past)
@@ -745,7 +751,38 @@ impl Tree {
         self.fill_expansion_structures(ctx, id, helper)?;
         self.set_deadlock_status(id, ctx);
         self.update_subtree_size(id);
+
+        if self.search_mode == SearchMode::GirlSearch {
+            self.block_existing_sons_tree(id, nodes_before_expansion, ctx)?;
+        }
+
         Ok(id)
+    }
+
+    /// Port of `block_existing_sons_tree`; only meaningful for GIRL search.
+    pub fn block_existing_sons_tree(
+        &mut self,
+        expansion: ExpansionId,
+        nodes_before_expansion: usize,
+        ctx: &LevelContext,
+    ) -> Result<()> {
+        let (start, count) = {
+            let e = &self.expansions[expansion as usize];
+            (e.move_hash_place, e.moves_num as usize)
+        };
+
+        for i in 0..count {
+            let hash = self.move_hashes[start + i].hash;
+            let place = self
+                .find_node_by_hash(hash)
+                .ok_or_else(|| SolveError::Internal("block_existing_sons: missing node".into()))?;
+            if (place as usize) < nodes_before_expansion {
+                self.move_hashes[start + i].deadlocked = true;
+            }
+        }
+
+        self.set_deadlock_status(expansion, ctx);
+        Ok(())
     }
 
     fn update_subtree_size(&mut self, expansion: ExpansionId) {
