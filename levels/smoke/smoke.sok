@@ -1,0 +1,97 @@
+#######
+#     #
+# .$@ #
+#     #
+#######
+Title: Smoke 1 - single box
+
+########
+#  .   #
+#  $   #
+#  @   #
+########
+Title: Smoke 2 - push up
+
+#########
+#       #
+# .$ $. #
+#   @   #
+#       #
+#########
+Title: Smoke 3 - two boxes
+
+#########
+#       #
+# . $ @ #
+#       #
+#########
+Title: Smoke 4 - corridor
+
+#######
+#  .  #
+#     #
+#  $  #
+#  @  #
+#######
+Title: Smoke 5 - vertical tunnel
+
+#########
+#   #   #
+# . $ @ #
+#   #   #
+#########
+Title: Smoke 6 - horizontal tunnel
+
+###########
+#   #     #
+# . # .$@ #
+# $ #     #
+#   #     #
+#         #
+###########
+Title: Smoke 7 - two rooms
+
+###########
+#   #     #
+# . # . . #
+# $ # $ $ #
+#   #  @  #
+#         #
+###########
+Title: Smoke 8 - three boxes
+
+############
+#    #     #
+# .  #  .  #
+# $  #  $  #
+#    #  @  #
+#          #
+############
+Title: Smoke 9 - wide rooms
+
+#########
+#       #
+#    .  #
+#       #
+#  $    #
+#  @    #
+#########
+Title: Smoke 10 - corner deadlock trap
+
+#########
+#       #
+#   .   #
+#    #  #
+#  $    #
+#  @    #
+#########
+Title: Smoke 11 - frozen boxes trap
+
+#########
+#       #
+#    .  #
+#       #
+#  $    #
+#  @    #
+#########
+Title: Smoke 12 - avoid the corner

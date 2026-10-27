@@ -1,0 +1,14 @@
+[package]
+name = "festival-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Command line front end for festival-rs"
+
+[[bin]]
+name = "festival-rs"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+festival-core.workspace = true

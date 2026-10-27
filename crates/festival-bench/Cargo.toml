@@ -1,0 +1,13 @@
+[package]
+name = "festival-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "End-to-end driver for festival-rs static analysis and benchmarks"
+
+[[bin]]
+name = "festival-bench"
+path = "src/main.rs"
+
+[dependencies]
+festival-core.workspace = true
