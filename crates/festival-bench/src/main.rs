@@ -66,6 +66,35 @@ fn main() -> ExitCode {
         return deadlock_explain(Path::new(&args[1]), level_number, &args[3], cache_off);
     }
 
+    if args.first().map(String::as_str) == Some("dragonfly-stats") {
+        if args.len() != 4 && args.len() != 5 {
+            eprintln!(
+                "usage: festival-bench dragonfly-stats <levels.sok> <level> <seconds> [--dump]"
+            );
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        let seconds: u64 = args[3].parse().unwrap_or(0);
+        return dragonfly_stats(Path::new(&args[1]), level_number, seconds);
+    }
+
+    if args.first().map(String::as_str) == Some("girl-trace") {
+        if args.len() != 6 {
+            eprintln!(
+                "usage: festival-bench girl-trace <levels.sok> <level> <plan.txt> <boards> <out>"
+            );
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        return girl_trace(
+            Path::new(&args[1]),
+            level_number,
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+            Path::new(&args[5]),
+        );
+    }
+
     if args.first().map(String::as_str) == Some("packing-plan") {
         if args.len() != 5 {
             eprintln!(
@@ -80,6 +109,223 @@ fn main() -> ExitCode {
     }
 
     analyse(args.first().map(String::as_str).unwrap_or("XSokoban"))
+}
+
+/// Mirrors `refcheck dragonfly`: Dragonfly exploration and frontier stats.
+fn dragonfly_stats(levels_path: &Path, level_number: usize, seconds: u64) -> ExitCode {
+    use festival_core::deadlock::state::DeadlockState;
+    use festival_core::search::dragonfly::{DragonflyConfig, run_dragonfly};
+    use festival_core::search::perimeter::Perimeter;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut deadlock = match DeadlockState::prepare(&ctx) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("deadlock: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut helper = Helper::default();
+    let mut perimeter = Perimeter::new(25);
+    let config = DragonflyConfig {
+        time_limit: Some(Duration::from_secs(seconds)),
+        trace: std::env::args().any(|arg| arg == "--dump"),
+        ..DragonflyConfig::default()
+    };
+    let run = match run_dragonfly(
+        &ctx,
+        &mut deadlock,
+        &mut helper,
+        &mut perimeter,
+        &config,
+        &ctx.level.board,
+    ) {
+        Ok(run) => run,
+        Err(err) => {
+            eprintln!("dragonfly: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("nodes {}", run.nodes);
+    println!("roots {}", run.roots);
+    println!("max_nodes {}", config.max_nodes);
+    println!("perimeter_entries {}", perimeter.total_entries());
+    println!("perimeter_full {}", usize::from(perimeter.is_full()));
+    println!("perimeter_found {}", usize::from(helper.perimeter_found));
+    if let Some(trace) = run.trace {
+        for (index, node) in trace.iter().enumerate() {
+            println!(
+                "node {} {} {} {} {} {}",
+                index, node.depth, node.father, node.dist, node.packed, node.hash
+            );
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn load_plan(path: &Path) -> Result<Vec<festival_core::planning::ParkOrder>, String> {
+    let text = fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    let mut plan = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(first) = fields.next() else {
+            continue;
+        };
+        let Ok(from) = first.parse::<i32>() else {
+            continue; // "expansions N" / "plan N"
+        };
+        let Some(to) = fields.next().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Some(until) = fields.next().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        plan.push(festival_core::planning::ParkOrder { from, to, until });
+    }
+    Ok(plan)
+}
+
+/// GIRL score/value trace on a fixed board sample and parking plan; the C++
+/// counterpart is `refcheck girl`.
+fn girl_trace(
+    levels_path: &Path,
+    level_number: usize,
+    plan_path: &Path,
+    boards_path: &Path,
+    out_path: &Path,
+) -> ExitCode {
+    use festival_core::constants::SearchMode;
+    use festival_core::planning::park_order;
+    use festival_core::search::girl::score_to_value;
+    use festival_core::search::score::score_board;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(3600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let plan = match load_plan(plan_path) {
+        Ok(plan) => plan,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut helper = Helper {
+        parking_order: plan,
+        ..Helper::default()
+    };
+    if let Err(err) = park_order::verify_parking_order(&ctx, &helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = park_order::reduce_parking_order(&ctx, &mut helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    let boards_text = match fs::read_to_string(boards_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{}: {err}", boards_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let width = ctx.level.initial.width();
+    let height = ctx.level.initial.height();
+    let mut out = String::new();
+
+    for line in boards_text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(hex) = fields.next() else {
+            continue;
+        };
+        let Some(data) = hex_board(hex, width, height) else {
+            eprintln!("bad board hex on level {level_number}");
+            return ExitCode::FAILURE;
+        };
+        let board = match Board::from_bytes(width, height, &data) {
+            Ok(board) => board,
+            Err(err) => {
+                eprintln!("board: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let push = score_board(&ctx, &helper, &board, false, SearchMode::GirlSearch);
+        let pull = score_board(&ctx, &helper, &board, true, SearchMode::GirlSearch);
+        out.push_str(&format!(
+            "{hash} {} {} {} {} {} {:.17e} {} {} {} {:.17e}\n",
+            push.packed_boxes,
+            push.boxes_on_targets,
+            push.connectivity,
+            push.dist_to_targets,
+            push.overlap,
+            score_to_value(&push, false, &ctx.girl),
+            pull.boxes_on_targets,
+            pull.connectivity,
+            pull.dist_to_targets,
+            score_to_value(&pull, true, &ctx.girl),
+        ));
+    }
+
+    if let Err(err) = fs::write(out_path, out) {
+        eprintln!("{}: {err}", out_path.display());
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
 fn packing_plan(

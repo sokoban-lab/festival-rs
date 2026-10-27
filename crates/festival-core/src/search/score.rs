@@ -9,6 +9,7 @@
 use crate::board::Board;
 use crate::constants::SearchMode;
 use crate::planning::{imagine, oop, park_order};
+use crate::search::girl;
 use crate::search::helper::Helper;
 use crate::search::hf;
 use crate::solver::LevelContext;
@@ -26,7 +27,11 @@ pub struct ScoreElement {
     pub out_of_plan: i16,
     pub overlap: i16,
     pub imagine: i16,
+    /// Back-propagated GIRL value (`girl.cpp` keeps this in `f32`).
     pub value: f32,
+    /// GIRL `score_to_value` of the raw features. Kept separate because the
+    /// back-propagated `value` must not leak into `is_better_score`.
+    pub girl_value: f64,
     pub biconnect: i16,
 }
 
@@ -47,18 +52,29 @@ pub fn is_better_score(
         return hf::is_better_hf_score(new_score, old_score, pull_mode);
     }
 
+    if search_mode == SearchMode::NaiveSearch {
+        if new_score.dist_to_targets < old_score.dist_to_targets {
+            return true;
+        }
+        if new_score.dist_to_targets > old_score.dist_to_targets {
+            return false;
+        }
+        return new_score.packed_boxes > old_score.packed_boxes;
+    }
+
     if search_mode == SearchMode::RevSearch {
         return hf::is_better_rev_score(new_score, old_score, pull_mode);
     }
 
-    // GIRL / SNAIL / NETLOCK / NAIVE / K_DIST comparators belong to Phase 5/6.
+    if search_mode == SearchMode::GirlSearch {
+        // The stored raw-feature value; see `ScoreElement::girl_value`.
+        return new_score.girl_value > old_score.girl_value;
+    }
+
+    // SNAIL / NETLOCK / K_DIST comparators are Phase 6 / deadlock-search only.
     if matches!(
         search_mode,
-        SearchMode::GirlSearch
-            | SearchMode::SnailSearch
-            | SearchMode::NetlockSearch
-            | SearchMode::NaiveSearch
-            | SearchMode::KDistSearch
+        SearchMode::SnailSearch | SearchMode::NetlockSearch | SearchMode::KDistSearch
     ) {
         return false;
     }
@@ -171,11 +187,18 @@ pub fn score_board(
 ) -> ScoreElement {
     let level = &ctx.level;
     let mut score = ScoreElement {
-        boxes_on_targets: board.boxes_on_targets() as i16,
-        connectivity: crate::bfs::get_connectivity(level, board) as i16,
-        boxes_in_level: board.boxes_in_level() as i16,
+        boxes_in_level: level.box_count as i16,
         ..ScoreElement::default()
     };
+
+    if search_mode == SearchMode::NaiveSearch {
+        score.packed_boxes = crate::search::naive::fill_naive_scores(&level.initial, board);
+        return score;
+    }
+
+    score.boxes_on_targets = board.boxes_on_targets() as i16;
+    score.connectivity = crate::bfs::get_connectivity(level, board) as i16;
+    score.boxes_in_level = board.boxes_in_level() as i16;
 
     match search_mode {
         SearchMode::KDistSearch | SearchMode::XySearch | SearchMode::MiniSearch => {
@@ -204,9 +227,14 @@ pub fn score_board(
             };
             return score;
         }
+        SearchMode::GirlSearch => {
+            girl::fill_girl_scores(ctx, helper, board, &mut score, pull_mode);
+            score.girl_value = girl::score_to_value(&score, pull_mode, &ctx.girl);
+            return score;
+        }
         SearchMode::Normal | SearchMode::BaseSearch | SearchMode::ForwardWithBases => {}
-        // GIRL / NAIVE / SNAIL / NETLOCK are Phase 5/6; keep the base score
-        // instead of inventing semantics.
+        // SNAIL / NETLOCK are Phase 6; keep the base score instead of
+        // inventing semantics.
         _ => return score,
     }
 

@@ -16,14 +16,17 @@ before the next one starts.
 | Phase 2 | complete (forward-only, Gate G2) | arena tree, indexed heap, FESS requests/scores/advisors, unified deadlock oracle, cyclic `has_winning_move`, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
 | Phase 3 | complete (deadlock subsystem, Gate G3) | deadlock zone, corral/π-corral, positions arena, deadlock cache, advanced/matching/pull elimination, k-distance, XY, rooms, wobblers, mini search, MPDB2, stuck learning, cycle deadlock, envelope learning, C++ deadlock differential |
 | Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
-| Phase 5+ | not started | GIRL, Dragonfly, strategies C/H, multi-core scheduling |
+| Phase 5 | complete (GIRL/Dragonfly, Gate G5) | GIRL value function and ε-greedy tree descent, Dragonfly priority-queue pull search, NAIVE forward scoring, strategies C/H, GIRL score/value differential |
+| Phase 6+ | not started | 8-strategy scheduler, 1/2/4/8-core execution, shared deadlock/perimeter state |
 
-The CLI now runs the same reverse-packing → plan → forward-FESS strategy
-structure as C++. `-alg 0` means strategy A (C++ compatible), and
-`--forward-only` keeps the Phase 2 NORMAL forward search. Strategies 0, 1, 3,
-4, 5, 6 solve Microban 1–80 with the same solve set as C++; all 480 Rust
-solutions replay independently, and total wall time is 0.51× C++ (Gate G4).
-Strategy C (GIRL) and H (Dragonfly) still report an explanatory error.
+The CLI runs the same reverse-packing → plan → forward-FESS structure as C++.
+`-alg 0` means strategy A (C++ compatible), and `--forward-only` keeps the
+Phase 2 NORMAL forward search. All eight strategies are available. Strategies
+0/1/3/4/5/6 solve Microban 1–80 with the same solve set as C++ (Gate G4).
+Strategy C (GIRL) has the same 78/80 solved set as C++ and identical total
+moves/pushes; strategy H (Dragonfly + NAIVE) solves 80/80 with a 0.3% quality
+difference (Gate G5). Every Rust solution replays independently. Multi-core
+scheduling remains Phase 6, so `-cores > 1` still runs single-threaded.
 
 The deadlock subsystem remains the G3 implementation: 238,928 sampled boards
 with 0 verdict mismatches and a cache-on/cache-off invariant. Output files are
@@ -86,6 +89,13 @@ Microban 1–80):
 G4_TIME=60 scripts/run_g4.sh
 ```
 
+Reproduce Gate G5 (strategies C/H, 100-level Dragonfly sweep, GIRL
+score/value differential):
+
+```sh
+G5_TIME=60 scripts/run_g5.sh
+```
+
 Baseline commands, recorded results and per-level quality differences are in
 [`reference/BASELINE.md`](reference/BASELINE.md).
 
@@ -115,8 +125,9 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/deadlock/          zone, corral, advanced/matching, positions, cache, k-dist,
                          XY, rooms, wobblers, mini, MPDB2, stuck, cycle
   src/search/            tree, heap, requests, scores, advisors, FESS loop,
-                         packing search, HF/MAX_DIST scoring, perimeter
-  src/solver/            strategy A/B/D/E/F/G runner, clocks, outcome
+                         packing search, HF/MAX_DIST scoring, GIRL/ε-greedy,
+                         Dragonfly, NAIVE, perimeter
+  src/solver/            strategy A–H runner, clocks, outcome
   src/planning/          park order, OOP, imagine/overlap, base matching, opener
   src/io/lurd.rs         independent LURD replay validator
   src/io/solution.rs     player-path BFS, LURD and result files
@@ -126,7 +137,8 @@ crates/festival-bench/   static analysis CSV, deadlock differential, packing pla
 levels/smoke/            12 self-authored regression levels
 levels/corpus/           Microban I (155 levels, checksum + attribution)
 reference/               C++ baseline notes, pthread shim, refcheck driver
-scripts/                 corpus fetch, Gates G2/G3/G4, plan comparator, C++ builds
+scripts/                 corpus fetch, Gates G2/G3/G4/G5, plan/score comparators,
+                         C++ builds
 ```
 
 ## Licensing

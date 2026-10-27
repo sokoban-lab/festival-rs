@@ -7,6 +7,7 @@ use crate::analysis::{self, Hotspots, Rooms};
 use crate::distance::{self, Distances};
 use crate::error::Result;
 use crate::level::Level;
+use crate::search::girl::GirlParams;
 use crate::solver::clock::SearchClock;
 
 pub struct LevelContext {
@@ -14,6 +15,7 @@ pub struct LevelContext {
     pub distances: Distances,
     pub rooms: Rooms,
     pub hotspots: Hotspots,
+    pub girl: GirlParams,
 }
 
 impl LevelContext {
@@ -23,12 +25,14 @@ impl LevelContext {
         let distances = distance::compute(&level);
         let rooms = analysis::rooms::analyse(&level, &level.board)?;
         let hotspots = analysis::hotspot::init(&level, &distances, clock.hotspot_abort_at());
+        let girl = GirlParams::compute(&level);
 
         Ok(Self {
             level,
             distances,
             rooms,
             hotspots,
+            girl,
         })
     }
 }

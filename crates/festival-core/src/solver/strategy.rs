@@ -15,6 +15,7 @@ use crate::io::lurd;
 use crate::io::solution::build_lurd;
 use crate::moves::Move;
 use crate::planning::{oop, park_order};
+use crate::search::dragonfly::{DragonflyConfig, run_dragonfly};
 use crate::search::fess::{FessConfig, run_fess_into};
 use crate::search::helper::Helper;
 use crate::search::packing::{PackingConfig, run_packing};
@@ -124,22 +125,12 @@ pub fn solve_strategy(
     let backward = BACKWARD_SEARCH_TYPES[strategy_index];
     let forward = FORWARD_SEARCH_TYPES[strategy_index];
 
-    if matches!(backward, SearchMode::GirlSearch) || matches!(forward, SearchMode::GirlSearch) {
-        return Err(SolveError::Internal(
-            "strategy C needs GIRL search, which arrives in Phase 5".into(),
-        ));
-    }
-    if matches!(backward, SearchMode::Dragonfly) {
-        return Err(SolveError::Internal(
-            "strategy H needs Dragonfly, which arrives in Phase 5/6".into(),
-        ));
-    }
-
     let started = Instant::now();
     let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
     tree.prepare_deadlock(ctx)?;
     let mut helper = Helper::default();
-    let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
+    // Single-core C++ uses log2=25 for the shared frontier.
+    let mut perimeter = Perimeter::new(25);
 
     let total = secs(config.time_limit);
     let backward_budget = Duration::from_secs(total.as_secs() / 3);
@@ -148,7 +139,24 @@ pub fn solve_strategy(
     helper.weighted_search = true;
     let mut total_expansions = 0u64;
 
-    if backward == SearchMode::RevSearch {
+    if backward == SearchMode::Dragonfly {
+        // `packing_search_control` triples the 1/3 slot, so Dragonfly gets the
+        // whole remaining budget. `--max-expansions` has no Dragonfly analogue.
+        let dragonfly_budget = Duration::from_secs(backward_budget.as_secs().saturating_mul(3));
+        let config = DragonflyConfig {
+            time_limit: Some(dragonfly_budget),
+            ..DragonflyConfig::default()
+        };
+        let run = run_dragonfly(
+            ctx,
+            &mut tree.deadlock,
+            &mut helper,
+            &mut perimeter,
+            &config,
+            &ctx.level.board,
+        )?;
+        total_expansions += run.expansions;
+    } else if backward == SearchMode::RevSearch {
         let (time_limit, max_expansions) = phase_limit(config, backward_budget);
         let fess_config = FessConfig {
             time_limit,
@@ -404,9 +412,9 @@ fn finish_with_moves(
     })
 }
 
-/// True for strategies implemented before Phase 5.
+/// All eight C++ strategies are implemented.
 pub fn strategy_supported(index: usize) -> bool {
-    matches!(index, 0 | 1 | 3 | 4 | 5 | 6)
+    index < 8
 }
 
 /// Convenience for tests and the bench driver.

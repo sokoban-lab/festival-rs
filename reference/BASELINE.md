@@ -262,10 +262,96 @@ fb85bf57cddcd711a4034765a1fed58526ce14357dc8fc683a7c9cbbe5c49f74 *target/g4/smok
 1 MB main-thread stack at -O3. Solver logic and the reference binary are
 unchanged.
 
+## Gate G5 differential (2026-10-27)
+
+Commands (repository root, same machine as G2/G3/G4):
+
+```sh
+G5_SKIP_BUILD=1 G5_TIME=60 scripts/run_g5.sh
+```
+
+The script rebuilds/runs build steps when `G5_SKIP_BUILD` is unset, compares
+strategies C (2) and H (7) on the smoke set and Microban 1–80, runs a 1–100
+Dragonfly sweep, and compares GIRL push/pull scores and values on sampled
+reachable boards with an identical parking plan on both sides. Runs are not
+CPU-pinned; times include process startup and preprocessing.
+
+### Solver results
+
+| Strategy | Set | C++ solved | Rust solved | C++ moves/pushes | Rust moves/pushes | C++ time | Rust time |
+|---|---|---|---|---|---|---|---|
+| 2 C | smoke | 12/12 | 12/12 | 123 / 40 | 123 / 40 | 0.89 s | 0.34 s |
+| 7 H | smoke | 12/12 | 12/12 | 81 / 28 | 81 / 28 | 0.79 s | 0.30 s |
+| 2 C | Microban 1–80 | 78/80 | 78/80 | 6188 / 1657 | 6188 / 1657 | 131.52 s | 122.79 s |
+| 7 H | Microban 1–80 | 80/80 | 80/80 | 6496 / 1753 | 6516 / 1743 | 7.17 s | 2.03 s |
+
+- Strategy C solve set and every per-level moves/pushes count match C++ (levels
+  8 and 19 time out on both sides at 60 s).
+- Strategy H solve set matches; aggregate moves are 100.3% and pushes 99.4% of
+  C++. Seven levels differ in quality (13, 36, 48, 53, 57, 63, 75); no illegal
+  solutions. `refcheck dragonfly` shows small frontier differences on these
+  levels (e.g. level 13: 107 C++ nodes vs 109 Rust nodes), which shifts the
+  forward NAIVE search.
+- Independent LURD replay: 0 invalid across smoke, Microban and the sweep.
+
+### Dragonfly 100-level sweep
+
+`-alg 7 -time 10 -cores 1` over Microban 1–100:
+
+| Metric | Value |
+|---|---|
+| Solved | 100/100 |
+| Invalid solutions | 0 |
+| Wall time | 2.88 s |
+| Panics / bounds errors | 0 |
+
+### GIRL score/value differential
+
+For each level the drivers use the same C++ parking plan (`refcheck plan`,
+strategy 1, log2 nodes 20) and the same reachable-board sample (G3 sampling,
+2,000 boards per level where available). `refcheck girl` and
+`festival-bench girl-trace` print the GIRL push/pull fields
+(`packed`, `tgt`, `connectivity`, `dist`, `overlap`) and `score_to_value` with
+17 significant digits; `scripts/compare_girl_scores.py` requires exact integer
+fields and `|value diff| < 1e-5`.
+
+| Metric | Value |
+|---|---|
+| Rows compared | 92,903 |
+| Integer field mismatches | 0 |
+| Max \|value difference\| | 0 (threshold 1e-5) |
+
+`refcheck dragonfly` reports exploration stats (nodes, roots, perimeter
+entries) and is used only as a diagnostic; exact Dragonfly trace equality is
+not a Gate G5 criterion.
+
+### Regression
+
+Gate G4 was re-run after the Phase 5 changes (single-core perimeter log2 raised
+from 20 to the C++ value of 25): 397 exact + 3 equivalent plans, and all six
+strategies keep their solve sets and recorded moves/pushes. Total wall time C++
+39.18 s, Rust 21.79 s.
+
+Recorded checksums (the solution files and logs embed timestamps/timings, so
+these identify the run rather than being bit-reproducible):
+
+```text
+bd4fa8e8995f17d7a2bf1e418c23660a5c6e1c408d2429f628d3707edf079fc1 *target/g5/summary.txt
+f4e26d56d0a89905f790893f0599f0c7e8b10e9b61328581401b35134a87a5c2 *target/g5/girl-diff.log
+0f261b83dbcbfaf4aaed4dbed40e1116266f90e1ea03dba247c8c7108b01ec4c *target/g5/microban-rust2/solutions.sok
+000aa7325245ef3895d996e3f0bf6c50dd3aad338933b157439fd92fc8d2dcdd *target/g5/microban-rust2/times.txt
+e84f5d8297cb92bd17df60a260687bbd26f1e4ef54ac015016c714175757d895 *target/g5/microban-rust7/solutions.sok
+2a7d867b3893ea494adb4e42104fd59af572b426aecad7e3a17a63b42b437450 *target/g5/microban-rust7/times.txt
+652ec862e0e8ad4942adf6cfc175f3b3df57a3c12d7f5e5426712ea42ac209e9 *target/g5/sweep-rust7/solutions.sok
+25e413e0740f4c08c8af00e66b96f3c1e3ab89450f86f89164297ef08dad409b *target/g5/sweep-rust7/times.txt
+e6c396962d00dfacffca7c3b9ba213063334c1dd5c93728c4921ccc9b8610d75 *target/g5-run.log
+```
+
 ## Still missing
 
-Phase 5/6 items: GIRL (strategy C) and Dragonfly (strategy H), the 8-strategy
-multi-core scheduler, shared deadlock/perimeter state across threads, and
-per-node trace comparison (`refcheck trace`). The current differential covers
+Phase 6 items: the 8-strategy multi-core scheduler, shared deadlock/perimeter
+state across threads, `SNAIL_SEARCH` / `NETLOCK_SEARCH`, and per-node search
+trace comparison (`refcheck trace`). The current differential covers
 per-board/per-move deadlock verdicts, packing plans, end-to-end solve results
-and independent solution replay.
+for all eight strategies, GIRL score/value numerics, Dragonfly exploration
+stats and independent solution replay.

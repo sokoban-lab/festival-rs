@@ -140,9 +140,7 @@ fn run(args: &Args) -> Result<(), String> {
             return Err("Algorithm number should be 0..7".to_string());
         }
         if !strategy_supported(alg as usize) {
-            return Err(format!(
-                "strategy {alg} needs GIRL/Dragonfly search, which arrives in Phase 5/6"
-            ));
+            return Err(format!("strategy {alg} is not implemented"));
         }
     }
 
@@ -162,7 +160,7 @@ fn run(args: &Args) -> Result<(), String> {
 
     if !args.forward_only && args.alg.is_none() {
         println!(
-            "note: Phase 4 runs strategy A by default; full 8-strategy scheduling arrives in Phase 6."
+            "note: runs strategy A by default; full 8-strategy scheduling arrives in Phase 6."
         );
     }
     if let Some(cores) = args.cores {

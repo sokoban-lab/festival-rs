@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0/1/2/3/4 完成；策略 A/B/D/E/F/G 与 C++ 同策略在 Microban 1–80 上解题集一致，packing 计划 397/400 逐项一致、3 个等价变体（Gate G4），GIRL/Dragonfly 待 Phase 5（2026-10-27） |
+| 当前进展 | Phase 0/1/2/3/4/5 完成；策略 A/B/D/E/F/G 在 Microban 1–80 上解题集一致（Gate G4），策略 C 与 C++ 解题集及总步数/推数完全一致、策略 H 解题集一致（Gate G5），GIRL score/value 在 92,903 个样本上零差异（2026-10-27） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1347,3 +1347,41 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 **下一阶段入口**
 
 - Phase 5：GIRL、Dragonfly、策略 C/H、`refcheck trace` 数值差分。
+
+---
+
+## 18. Phase 5 实施进展（2026-10-27）
+
+**已落地**
+
+- `search/girl.rs`：`GirlParams`（pull 距离、`max_push_dist`、γ 表、双向归一化、`inv_epsilon`）、硬编码 push 8 / pull 6 权重、`score_to_value`、`fill_girl_scores`；特征顺序与 C++ 完全一致，值用 `f64` 计算。
+- `search/girl.rs` 的树操作：`set_values_to_moves`、`recompute_values`、`back_propagate_values`、`choose_cyclic_son`、`choose_best_value_son`、`pick_son_epsilon_greedy`、`go_to_root_greedy`、`choose_pos_son_to_expand_epsilon_greedy`、`find_best_rl_parking_node`。
+- `search/score.rs`：GIRL `is_better_score`、GIRL / NAIVE `score_board`；`ScoreElement.girl_value` 保存原始特征的 `score_to_value`，与反向传播用的 `f32 value` 分离。
+- `search/fess.rs`、`search/packing.rs`、`search/perimeter.rs`、`search/tree.rs`：GIRL 切换点（命中 perimeter 后 `insert_all_tree_nodes_to_queues`）、ε-greedy 下降、packing 中的 RL 停车节点选择；`park_order::conclude_parking` 的 GIRL 分支。
+- `search/dragonfly.rs`：Dragonfly 节点池、根重建、优先队列（dist → packed → 索引）、corral 剪枝、base 距离、perimeter 双向接口、求解/超时/节点上限。
+- `search/naive.rs`：`set_naive_data_in_node`、`fill_naive_scores` 与 NAIVE 比较器；策略 H 的正向 FESS。
+- `solver/strategy.rs`：策略 C（GIRL packing → 规划 → GIRL FESS）与 H（Dragonfly → NAIVE FESS）；`-cores` 仍为单线程。
+- 差分工具：`refcheck girl` / `refcheck dragonfly`、`festival-bench girl-trace` / `dragonfly-stats`、`scripts/compare_girl_scores.py`、`scripts/run_g5.sh`。
+- 单核 perimeter 改为与 C++ 相同的 `log2=25`；G4 全量复跑结果不变（397 精确 + 3 等价）。
+
+**Gate G5 结果（2026-10-27，`G5_SKIP_BUILD=1 scripts/run_g5.sh`）**
+
+| 策略 | 集合 | C++ 解题 | Rust 解题 | C++ moves/pushes | Rust moves/pushes | C++ 时间 | Rust 时间 | 非法解 |
+|---|---|---|---|---|---|---|---|---|
+| 2 C | smoke | 12/12 | 12/12 | 123 / 40 | 123 / 40 | 0.89 s | 0.34 s | 0 |
+| 7 H | smoke | 12/12 | 12/12 | 81 / 28 | 81 / 28 | 0.79 s | 0.30 s | 0 |
+| 2 C | Microban 1–80 | 78/80 | 78/80 | 6188 / 1657 | 6188 / 1657 | 131.52 s | 122.79 s | 0 |
+| 7 H | Microban 1–80 | 80/80 | 80/80 | 6496 / 1753 | 6516 / 1743 | 7.17 s | 2.03 s | 0 |
+
+- 策略 C 的解题集、逐关步数/推数与 C++ 完全一致（第 8、19 关双方均在 60 秒内未解出）；策略 H 解题集一致，总步数 100.3%、总推数 99.4%。7/80 关存在步数差异（第 13、36、48、53、57、63、75 关），无非法解。
+- Dragonfly 100 关扫描（`-alg 7 -time 10`）：100/100 解出、0 非法解、2.88 s，无 panic/越界。
+- GIRL 数值差分：固定 C++ parking plan，对 80 关的 92,903 个可达样本盘面比较 push/pull 的 `packed/tgt/connectivity/dist/overlap` 与 `score_to_value`；整数字段全一致，**最大 |value 差| = 0**（阈值 1e-5）。样本来自 G3 的可达盘面采样（trace 节点集合）。
+- 回归：G4 策略 0/1/3/4/5/6 与 packing 计划在本次改动后复跑不变；`cargo fmt --check`、`cargo clippy -D warnings`、`cargo test --workspace` 全绿。
+
+**Phase 5 有意保留的差异**
+
+- 多核调度未实现：`-cores > 1` 仍提示单线程；Gate G5 的“8 线程下 Dragonfly 节点池不共享/内存预算”留待 Phase 6 验证。当前每次 Dragonfly 搜索独立持有节点池（`Vec<DragonflyNode>`），无跨线程共享。
+- `SNAIL_SEARCH` / `NETLOCK_SEARCH` 的 `set_snail_parameters` / `set_netlock_parameters` 仍属 Phase 6；Microban 语料不触发这两个关卡专用模式。
+- `--max-expansions` 对 Dragonfly 无对应语义（C++ 只有时间预算）；策略 H 的反向阶段始终使用时间预算。
+- `refcheck dragonfly` 显示少量关卡的 Dragonfly 前沿规模与 C++ 不同（例如第 13 关 107 vs 109 个节点），因此策略 H 的解质量存在少量关卡级差异；解题集不受影响。
+- 逐节点搜索 trace（扩展顺序/label/move）仍未实现，GIRL 差分覆盖固定输入下的评分与数值，不覆盖完整搜索轨迹；该 trace 对比留待 Phase 6。

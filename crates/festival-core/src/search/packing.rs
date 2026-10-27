@@ -38,7 +38,7 @@ pub struct PackingRun {
     pub failure: Option<SolveError>,
 }
 
-fn compute_start_zones(ctx: &LevelContext) -> ([u32; MAX_INNER], usize) {
+pub(crate) fn compute_start_zones(ctx: &LevelContext) -> ([u32; MAX_INNER], usize) {
     let mut b = ctx.level.initial;
     b.clear_boxes_inplace();
     b.turn_targets_into_walls();
@@ -48,7 +48,7 @@ fn compute_start_zones(ctx: &LevelContext) -> ([u32; MAX_INNER], usize) {
     (zones, num)
 }
 
-fn put_sokoban_in_zone(board: &mut Board, zones: &[u32; MAX_INNER], z: u32) {
+pub(crate) fn put_sokoban_in_zone(board: &mut Board, zones: &[u32; MAX_INNER], z: u32) {
     board.clear_sokoban_inplace();
     for y in 0..board.height() {
         for x in 0..board.width() {
@@ -154,6 +154,10 @@ pub fn run_packing(
         let label = helper.requests.label_of_score(&score, true);
         tree.add_label_to_last_node(label, ctx, helper)?;
 
+        if search_mode == SearchMode::GirlSearch {
+            tree.handle_new_pos_in_girl_mode(ctx, root)?;
+        }
+
         if best_so_far.is_none() || tree.best_so_far_is_better(best_so_far.unwrap(), root) {
             best_so_far = Some(root);
         }
@@ -191,9 +195,19 @@ pub fn run_packing(
                 .ok_or_else(|| SolveError::Internal("missing pack request".into()))?
         };
 
-        let label = helper.requests.label_of_pack_request(&request);
         let (tree_weight, tree_pos, tree_son) =
-            tree.best_move_in_tree(usize::try_from(label).unwrap_or(usize::MAX), ctx);
+            if search_mode == SearchMode::GirlSearch && !helper.perimeter_found {
+                match tree.choose_pos_son_to_expand_epsilon_greedy(ctx)? {
+                    Some((pos, son)) => (0, pos as i32, son as i32),
+                    None => {
+                        failure = Some(SolveError::Internal("no more roots".into()));
+                        break;
+                    }
+                }
+            } else {
+                let label = helper.requests.label_of_pack_request(&request);
+                tree.best_move_in_tree(usize::try_from(label).unwrap_or(usize::MAX), ctx)
+            };
 
         if helper.perimeter_found && tree_weight >= 0 {
             continue;
@@ -232,6 +246,10 @@ pub fn run_packing(
         expansions += 1;
         let child = tree.expand_node(ctx, expanded_node, tree_son as usize, helper)?;
         tree.set_advisors_and_weights(child, ctx, helper)?;
+
+        if search_mode == SearchMode::GirlSearch {
+            tree.handle_new_pos_in_girl_mode(ctx, child)?;
+        }
 
         let score = expansion_score(tree, child);
         helper.requests.add_pack_request(&score)?;

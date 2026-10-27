@@ -149,12 +149,6 @@ pub fn run_fess_into(
         });
     }
 
-    if search_mode == SearchMode::GirlSearch {
-        return Err(SolveError::Internal(
-            "GIRL_SEARCH is not implemented before Phase 5".into(),
-        ));
-    }
-
     let clock = SearchClock::new(config.time_limit, config.max_expansions);
     helper.init_scored_distance(ctx, &ctx.level.board, false);
 
@@ -171,6 +165,10 @@ pub fn run_fess_into(
     let mut new_node = tree.set_root(ctx, ctx.level.board, helper)?;
     tree.set_advisors_and_weights(new_node, ctx, helper)?;
     tree.expansions[new_node as usize].best_past = tree.expansions[new_node as usize].node;
+
+    if search_mode == SearchMode::GirlSearch {
+        tree.handle_new_pos_in_girl_mode(ctx, new_node)?;
+    }
 
     let mut best_so_far = new_node;
 
@@ -213,12 +211,22 @@ pub fn run_fess_into(
                 .ok_or_else(|| SolveError::Internal("missing request".into()))?
         };
 
-        let label = helper.requests.label_of_request(&request);
-        if !(0..MAX_TREE_LABELS as i32).contains(&label) {
-            return Err(SolveError::Internal("bad request label".into()));
-        }
-
-        let (tree_weight, tree_pos, tree_son) = tree.best_move_in_tree(label as usize, ctx);
+        let (tree_weight, tree_pos, tree_son) =
+            if search_mode == SearchMode::GirlSearch && !helper.perimeter_found {
+                match tree.choose_pos_son_to_expand_epsilon_greedy(ctx)? {
+                    Some((pos, son)) => (0, pos as i32, son as i32),
+                    None => {
+                        failure = Some(SolveError::Internal("tree is exhausted".into()));
+                        break;
+                    }
+                }
+            } else {
+                let label = helper.requests.label_of_request(&request);
+                if !(0..MAX_TREE_LABELS as i32).contains(&label) {
+                    return Err(SolveError::Internal("bad request label".into()));
+                }
+                tree.best_move_in_tree(label as usize, ctx)
+            };
 
         if helper.perimeter_found && tree_weight >= 0 {
             continue;
@@ -254,6 +262,10 @@ pub fn run_fess_into(
         let child = tree.expand_node(ctx, expanded_node, tree_son as usize, helper)?;
         tree.set_advisors_and_weights(child, ctx, helper)?;
         new_node = child;
+
+        if search_mode == SearchMode::GirlSearch {
+            tree.handle_new_pos_in_girl_mode(ctx, new_node)?;
+        }
 
         let past = tree.expansions[new_node as usize].best_past;
         let past_score = tree.nodes[past as usize].score;

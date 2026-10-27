@@ -201,7 +201,12 @@ pub fn conclude_parking(
     best: Option<ExpansionId>,
     helper: &mut Helper,
 ) -> Result<bool> {
-    let Some(expansion) = best else {
+    let selected = if tree.search_mode == crate::constants::SearchMode::GirlSearch {
+        tree.find_best_rl_parking_node(&ctx.girl)
+    } else {
+        best
+    };
+    let Some(expansion) = selected else {
         helper.parking_order.clear();
         return Ok(false);
     };

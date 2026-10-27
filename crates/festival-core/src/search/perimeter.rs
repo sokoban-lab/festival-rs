@@ -174,6 +174,49 @@ impl Perimeter {
             .filter(|entry| entry.side == side)
             .map(|entry| entry.depth)
     }
+
+    /// `dragonfly_mark_visited_hashes`: `1` for an earlier dragonfly visit,
+    /// a negative attractive distance for a forward-frontier hit, else `0`.
+    pub fn mark_dragonfly_visited(&self, hashes: &[u64]) -> Vec<i32> {
+        hashes
+            .iter()
+            .map(|hash| match self.entries.get(hash) {
+                Some(entry) if entry.alg == SearchMode::Dragonfly as u8 => 1,
+                Some(entry) if entry.side == 0 => -2000 + entry.depth as i32,
+                _ => 0,
+            })
+            .collect()
+    }
+
+    /// `dragonfly_update_perimeter`.
+    pub fn update_dragonfly(&mut self, hashes: &[u64], visited: &[i32], depth: u16) {
+        let alg = SearchMode::Dragonfly as u8;
+        for (index, &hash) in hashes.iter().enumerate() {
+            if visited.get(index).copied().unwrap_or(0) == 1 {
+                continue;
+            }
+
+            if let Some(entry) = self.entries.get_mut(&hash) {
+                if entry.side == 1 {
+                    if depth < entry.depth {
+                        entry.depth = depth;
+                    }
+                    entry.alg = alg;
+                    continue;
+                }
+            }
+
+            self.entries.insert(
+                hash,
+                Entry {
+                    depth,
+                    side: 1,
+                    alg,
+                },
+            );
+            self.total_entries += 1;
+        }
+    }
 }
 
 #[cfg(test)]

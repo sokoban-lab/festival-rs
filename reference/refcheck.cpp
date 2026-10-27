@@ -26,6 +26,18 @@
 #include "packing_search.h"
 #include "tree.h"
 #include "util.h"
+#include "park_order.h"
+#include "score.h"
+#include "girl.h"
+#include "dragonfly.h"
+
+extern dragonfly_node* dragonfly_nodes;
+extern int dragonfly_nodes_num;
+extern int dragonfly_roots_num;
+extern int dragonfly_max_nodes;
+extern int total_perimeter_entries;
+int perimeter_is_full();
+void dragonfly_get_board(dragonfly_node* e, board b);
 
 void allocate_deadlock_cache();
 void read_deadlock_patterns(int pull_mode);
@@ -486,6 +498,183 @@ static int run_plan(int argc, char** argv)
 	return 0;
 }
 
+static int load_parking_plan(const char* path, helper* h)
+{
+	FILE* fp;
+	char line[2048];
+	int count = 0;
+
+	fp = fopen(path, "rb");
+	if (fp == NULL)
+	{
+		fprintf(stderr, "can't open plan %s\n", path);
+		return -1;
+	}
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		int from, to, until;
+		if (sscanf(line, "%d %d %d", &from, &to, &until) != 3)
+			continue;
+		if (count >= MAX_SOL_LEN)
+		{
+			fprintf(stderr, "plan too long\n");
+			fclose(fp);
+			return -1;
+		}
+		h->parking_order[count].from = from;
+		h->parking_order[count].to = to;
+		h->parking_order[count].until = until;
+		count++;
+	}
+	fclose(fp);
+	h->parking_order_num = count;
+	return 0;
+}
+
+static int run_dragonfly_stats(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	int seconds = atoi(argv[4]);
+	board start;
+	helper h;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	init_dragonfly();
+	init_helper(&h);
+	dragonfly_search(start, seconds, &h);
+
+	printf("nodes %d\n", dragonfly_nodes_num);
+	printf("roots %d\n", dragonfly_roots_num);
+	printf("max_nodes %d\n", dragonfly_max_nodes);
+	printf("perimeter_entries %d\n", total_perimeter_entries);
+	printf("perimeter_full %d\n", perimeter_is_full());
+	printf("perimeter_found %d\n", h.perimeter_found);
+	if (argc >= 6 && strcmp(argv[5], "dump") == 0)
+	{
+		int i;
+		for (i = 0; i < dragonfly_nodes_num; i++)
+		{
+			board b;
+			dragonfly_node* e = dragonfly_nodes + i;
+			dragonfly_get_board(e, b);
+			printf("node %d %d %d %d %d %llu\n", i, e->depth, e->father,
+				e->dist, e->packed, (unsigned long long)get_board_hash(b));
+		}
+	}
+	free_helper(&h);
+	return 0;
+}
+
+static int run_girl_score(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	const char* plan_path = argv[4];
+	const char* boards_path = argv[5];
+	const char* out_path = argv[6];
+	board start;
+	helper h;
+	FILE* fb;
+	FILE* fo;
+	char line[8192];
+	int written = 0;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	init_helper(&h);
+	init_helper_extra_fields(&h);
+
+	if (load_parking_plan(plan_path, &h) != 0)
+		return 1;
+
+	verify_parking_order(&h);
+	reduce_parking_order(&h);
+
+	fb = fopen(boards_path, "rb");
+	fo = fopen(out_path, "wb");
+	if (fb == NULL || fo == NULL)
+	{
+		fprintf(stderr, "can't open boards/output\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), fb) != NULL)
+	{
+		unsigned long long hash;
+		char hex[8192];
+		board b;
+		score_element push_score;
+		score_element pull_score;
+		double push_value;
+		double pull_value;
+		int y, x;
+
+		if (sscanf(line, "%llu %8191s", &hash, hex) != 2)
+			continue;
+
+		memset(b, 0, sizeof(board));
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+			{
+				unsigned int value;
+				sscanf(hex + 2 * (y * width + x), "%02x", &value);
+				b[y][x] = (unsigned char)value;
+			}
+
+		score_board(b, &push_score, 0, GIRL_SEARCH, &h);
+		score_board(b, &pull_score, 1, GIRL_SEARCH, &h);
+		push_value = score_to_value(&push_score, 0);
+		pull_value = score_to_value(&pull_score, 1);
+
+		fprintf(fo, "%llu %d %d %d %d %d %.17e %d %d %d %.17e\n",
+			hash,
+			push_score.packed_boxes,
+			push_score.boxes_on_targets,
+			push_score.connectivity,
+			push_score.dist_to_targets,
+			push_score.overlap,
+			push_value,
+			pull_score.boxes_on_targets,
+			pull_score.connectivity,
+			pull_score.dist_to_targets,
+			pull_value);
+		written++;
+	}
+
+	fclose(fb);
+	fclose(fo);
+	free_helper(&h);
+	printf("level %d: %d girl score rows\n", level_number, written);
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
 	// The solver's main() processes -cores/-extra_mem before allocating the
@@ -520,8 +709,28 @@ int main(int argc, char** argv)
 		return run_plan(argc, argv);
 	}
 
+	if (argc >= 5 && strcmp(argv[1], "dragonfly") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_dragonfly_stats(argc, argv);
+	}
+
+	if (argc >= 7 && strcmp(argv[1], "girl") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_girl_score(argc, argv);
+	}
+
 	fprintf(stderr,
 		"usage: refcheck deadlock <levels.sok> <level> <samples> <move_samples> <seed> <out_prefix>\n"
-		"       refcheck plan <levels.sok> <level> <strategy> <log_nodes>\n");
+		"       refcheck plan <levels.sok> <level> <strategy> <log_nodes>\n"
+		"       refcheck girl <levels.sok> <level> <plan> <boards> <out>\n"
+		"       refcheck dragonfly <levels.sok> <level> <seconds>\n");
 	return 2;
 }

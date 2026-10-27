@@ -560,6 +560,9 @@ impl Tree {
         ctx: &LevelContext,
         helper: &mut Helper,
     ) -> Result<()> {
+        if self.search_mode == SearchMode::NaiveSearch {
+            crate::search::naive::set_naive_data_in_node(self, ctx, expansion)?;
+        }
         set_max_dist_data_in_node(self, ctx, expansion)?;
         self.set_imagine_data_in_node(expansion, ctx, helper)?;
 
@@ -1276,6 +1279,12 @@ impl Tree {
 
         if best_son == -1 {
             return false;
+        }
+
+        if !helper.perimeter_found && self.search_mode == SearchMode::GirlSearch {
+            // GIRL descends by value until the frontier is met; from here on
+            // the same tree is searched by FESS.
+            self.insert_all_tree_nodes_to_queues(ctx);
         }
 
         self.expansions[last as usize].weight = -2000 + (best_depth + 1);
