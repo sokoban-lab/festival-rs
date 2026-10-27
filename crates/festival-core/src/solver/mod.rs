@@ -3,6 +3,8 @@
 
 pub mod clock;
 pub mod context;
+pub mod forward;
 
 pub use clock::SearchClock;
 pub use context::LevelContext;
+pub use forward::{SolveOutcome, solve_forward};

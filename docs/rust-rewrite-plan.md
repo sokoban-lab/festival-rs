@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0 完成；Phase 1 基础层/静态分析/固定箱/距离匹配已落地，MPDB2 与 C++ 差分待补（2026-10-27） |
+| 当前进展 | Phase 0/1 完成；Phase 2 正向 FESS 最小闭环已落地（单线程 NORMAL，冒烟集 12/12），反向 packing 与完整死锁子系统待 Phase 3/4（2026-10-27） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1225,3 +1225,33 @@ Festival 的难点不在代码量，而在**隐式语义**：全局状态、固�
 
 - 进入 Phase 2：`Tree`/`IndexedHeap`/`Score`/FESS 主循环、解提取、移动生成与 CLI 求解模式。
 - MPDB2、envelope 构建与 C++ 差分随 Phase 3 的 mini search / XY 死锁一并补齐。
+
+---
+
+## 15. Phase 2 实施进展（2026-10-27）
+
+**已落地**
+
+- `search/tree.rs`：arena 索引版 `Tree`/`NodeElement`/`ExpansionData`/`MoveHashData`，开放寻址哈希表、`set_root`、`fill_expansion_structures`、`set_best_move`、`best_move_in_tree`、`set_deadlock_status`、`expand_node`、解路径回溯。
+- `search/queue.rs`：按 `best_weight` → `is_better_score` → expansion 索引排序的 `IndexedHeap`，支持删除重插。
+- `search/features.rs` + `search/advisors.rs`：环形 request 单元格、label 映射、NORMAL advisor（packed/connectivity/rooms/hotspots/out-of-plan）。
+- `search/score.rs`：`ScoreElement`、NORMAL 比较顺序、连通性/房间/热点/推送距离评分；`packed_boxes`、`out_of_plan`、`imagine` 按计划保留为 0。
+- `search/perimeter.rs`：基本前沿表与同向/反向更新语义（正向搜索中不会命中，为 Phase 4 预留）。
+- `deadlock/oracle.rs`：静态模式、2×2、freeze、3×3 与 `check_deadlock_in_moves`；corral、matching、MPDB2、k-dist、wobblers 明确未启用。
+- `moves.rs`：`apply_move`、`find_possible_moves`、宏推生成、`deadlock_in_direction` 接入。
+- `search/fess.rs`：单线程正向 FESS 主循环、扩展预算/时钟、`DeadlockOracle` 接入、解提取。
+- `io/solution.rs`：`find_sol_move`（玩家路径 BFS）、LURD 生成、`solutions.sok` / `times.txt` 格式化。
+- CLI：默认求解模式、`--analyse` 保留静态分析、`--max-expansions`、`-save_best`、`-out_file` YASC、`--validate`（始终启用）。
+- 测试：84 个单元测试 + 冒烟静态/求解集成测试；冒烟集 `--max-expansions` 模式下 12/12 解出，全部 LURD 通过独立回放校验。
+
+**Phase 2 有意保留的差异**
+
+- 仅实现正向 `NORMAL` 搜索；反向 packing、策略 1–7、HF/GIRL/Dragonfly、多核调度未接入。`-alg 1..7` 会显式报错，`-cores > 1` 会提示当前单线程。
+- 死锁剪枝只启用静态子集，解题率低于 C++；`packed_boxes` 等规划特征为 0，因此解可能合法但非最优（例如推数偏多）。
+- 当前机器仍无 C++ 基准（见 `reference/BASELINE.md`），未完成 `refcheck` 逐值/轨迹差分。
+- `-extra_mem`/`--tree-log-size` 控制树容量，默认 `log2(nodes)=20`，低于 C++ 的 23，以免单次调试占用 >1 GB。
+
+**下一阶段入口**
+
+- Phase 3：deadlock zone、corral、advanced matching、positions、k-dist/xy/rooms/wobblers、缓存与学习；随后替换 `deadlock/oracle.rs` 的静态子集。
+- Phase 4：packing、park order、OOP、imagine、HF 家族，接通策略 A–G 的反向搜索与正向规划评分。

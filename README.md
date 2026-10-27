@@ -11,13 +11,22 @@ before the next one starts.
 
 | Phase | Status | Contents |
 |---|---|---|
-| Phase 0 | partial | workspace, CLI skeleton, smoke set, LURD validator, CI |
-| Phase 1 | in progress | board, `.sok` parser, preprocessing, BFS, box graph, push/pull distances, rooms, hotspots, holes, biconnectivity |
-| Phase 2+ | not started | FESS tree/engine, deadlock subsystem, packing/planning, GIRL/Dragonfly, scheduling |
+| Phase 0 | complete | workspace, CLI, smoke set, LURD validator, CI |
+| Phase 1 | complete | board, `.sok` parser, preprocessing, BFS, box graph, push/pull distances, rooms, hotspots, holes, biconnectivity, fixed boxes, Hungarian matching |
+| Phase 2 | complete (forward-only) | arena tree, indexed heap, FESS requests/scores/advisors, static deadlock oracle, forward FESS loop, solution extraction, `solutions.sok` / `times.txt` |
+| Phase 3+ | not started | full deadlock subsystem, packing/planning, GIRL/Dragonfly, multi-core scheduling |
 
-The CLI currently runs static analysis only. The search engine arrives in
-Phase 2, so `-alg`, `-out_file`, `-save_best` and `--forward-only` are parsed and
-reported as not implemented instead of silently doing something else.
+The CLI now solves levels with a single-threaded **forward** FESS search
+(`NORMAL` score). It writes `solutions.sok` and `times.txt` in `-out_dir` and
+replays every produced LURD solution with the independent validator.
+
+Phase 2 deliberately stops before reverse packing: `--forward-only` is the
+supported mode, `-alg 0` is accepted as the forward part of strategy A, and
+`-alg 1..7` is rejected with an explanatory error. Deadlock pruning uses the
+static subset (embedded patterns, 2×2/3×3, freeze and fixed-box checks);
+corral, matching, MPDB2, k-distance and wobblers arrive with Phase 3. Solution
+quality is therefore not yet comparable to the C++ solver — FESS can return a
+legal but non-minimal path until the planning features land in Phase 4.
 
 ## Build and run
 
@@ -28,16 +37,28 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Analyse the bundled smoke levels:
+Solve the bundled smoke levels:
 
 ```sh
-cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 --dump
+cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 -time 60 -out_dir out
+cargo run -p festival-cli -- levels/smoke/smoke.sok --max-expansions 500000 -out_dir out
+```
+
+Analyse levels without searching:
+
+```sh
+cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 --analyse --dump
 cargo run -p festival-bench -- levels/smoke/smoke.sok
 ```
 
 Original single-dash options (`-level`, `-from`, `-to`, `-out_dir`, `-time`,
 `-out_file`, `-save_best`, `-cores`, `-alg`, `-extra_mem`) and the new
-`--max-expansions`, `--forward-only`, `--validate` options are accepted.
+`--max-expansions`, `--forward-only`, `--validate`, `--analyse`,
+`--tree-log-size` options are accepted. `-out_file` selects YASC mode: only the
+given solution file is written and `times.txt` is skipped.
+
+`--max-expansions N` disables the wall-clock limit, which makes runs
+reproducible for differential testing.
 
 A level argument containing `/`, `\` or `.` is used as a path. Otherwise it is
 resolved as `<out_dir>/levels/<name>.sok`, matching the C++ behavior. The
@@ -52,8 +73,11 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/bfs.rs             connectivity BFS
   src/graph.rs           push/pull box-move graph
   src/distance.rs        distance matrices and impossible places
-  src/analysis/          rooms, hotspots, holes, biconnectivity
+  src/analysis/          rooms, hotspots, holes, biconnectivity, matching
+  src/deadlock/          static patterns, 2x2/3x3/freeze oracle
+  src/search/            tree, heap, requests, scores, advisors, FESS loop
   src/io/lurd.rs         independent LURD replay validator
+  src/io/solution.rs     player-path BFS, LURD and result files
 crates/festival-cli/     festival-rs binary
 crates/festival-bench/   static analysis CSV driver
 levels/smoke/            12 self-authored regression levels

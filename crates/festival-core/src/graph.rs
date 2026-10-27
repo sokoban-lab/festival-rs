@@ -46,11 +46,12 @@ pub struct Graph {
 
 impl Graph {
     pub fn new(level: &Level) -> Self {
+        let vertices_num = level.index_num() * 4;
         Self {
-            vertices: Vec::new(),
+            vertices: vec![Vertex::default(); vertices_num],
             current_impossible: Board::new(level.initial.width(), level.initial.height())
                 .expect("level dimensions"),
-            vertices_num: 0,
+            vertices_num,
         }
     }
 

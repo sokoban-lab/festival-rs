@@ -4,5 +4,6 @@
 pub mod diags;
 pub mod direction;
 pub mod fixed_boxes;
+pub mod oracle;
 pub mod patterns;
 pub mod static_checks;

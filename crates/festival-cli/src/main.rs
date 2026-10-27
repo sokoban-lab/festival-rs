@@ -2,19 +2,30 @@
 // Rust port: festival-rs contributors.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use festival_core::constants::MAX_INNER;
-use festival_core::io::sok::{load_levels, resolve_level_file};
+use festival_core::io::sok::{RawLevel, load_levels, resolve_level_file};
+use festival_core::io::solution::{
+    append_level_to_solutions, append_solution, append_solution_time, append_times_row,
+    write_solutions_header, write_times_footer, write_times_header,
+};
+use festival_core::search::FessConfig;
+use festival_core::solver::solve_forward;
 use festival_core::{Level, LevelContext, SearchClock};
+
+const SOLVER_NAME: &str = "Festival 3.1";
+const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
+const BASE_TREE_LOG_SIZE: u32 = 20;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "festival-rs",
-    about = "Festival 3.1 Rust port. This build contains Phase 1 static analysis.",
+    about = "Festival 3.1 Rust port. Phase 2: forward FESS search.",
     disable_help_subcommand = true
 )]
 struct Args {
@@ -56,21 +67,26 @@ struct Args {
     #[arg(long = "max-expansions", value_name = "N")]
     max_expansions: Option<u64>,
 
-    /// Skip the reverse packing search (development only).
+    /// Skip the reverse packing search (development only; Phase 2 always does).
     #[arg(long = "forward-only")]
     forward_only: bool,
 
-    /// Replay and validate every produced solution (Phase 2+).
+    /// Replay and validate every produced solution (always enabled in Phase 2).
     #[arg(long = "validate")]
     validate: bool,
 
-    /// Print a static analysis summary (default in this build).
+    /// Print a static analysis summary instead of solving.
     #[arg(long = "analyse")]
     analyse: bool,
 
-    /// Dump boards, masks and room decomposition.
+    /// Dump boards, masks and room decomposition (with --analyse).
     #[arg(long = "dump")]
     dump: bool,
+
+    /// Tree capacity as `log2(nodes)`; defaults to 20 and can be raised for
+    /// large levels. `-extra_mem` is added on top.
+    #[arg(long = "tree-log-size", value_name = "N")]
+    tree_log_size: Option<u32>,
 }
 
 fn main() -> ExitCode {
@@ -122,26 +138,259 @@ fn run(args: &Args) -> Result<(), String> {
         if !(0..=7).contains(&alg) {
             return Err("Algorithm number should be 0..7".to_string());
         }
+        if alg != 0 {
+            return Err(format!(
+                "strategy {alg} needs reverse packing, which arrives in Phase 4; \
+                 Phase 2 supports -alg 0 / --forward-only"
+            ));
+        }
     }
-    if args.out_file.is_some() || args.save_best || args.forward_only || args.validate {
-        eprintln!(
-            "note: -out_file/-save_best/--forward-only/--validate are accepted for compatibility; \
-             search phases are not implemented in this build yet"
-        );
-    }
-    let _ = (args.alg, args.extra_mem, args.max_expansions, args.analyse);
 
     let path = resolve_level_file(&args.out_dir, &args.levels);
     let raws = load_levels(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-
     let (first, last) = select_range(args, raws.len())?;
 
     println!("===================================");
-    println!("Festival 3.1 (Rust port) - Phase 1 static analysis");
-    println!("Derived from Festival 3.1, Copyright 2018-2022 Yaron Shoham");
+    println!("{BANNER_NAME}");
+    println!("Copyright 2019-2022 by Yaron Shoham");
     println!("===================================");
     println!("{} levels loaded from {}", raws.len(), path.display());
 
+    if args.analyse {
+        return run_analysis(args, raws, first, last);
+    }
+
+    if !args.forward_only && args.alg.is_none() {
+        println!("note: Phase 2 runs forward FESS only; reverse packing arrives in Phase 4.");
+    }
+    if let Some(cores) = args.cores {
+        if cores > 1 {
+            println!("note: Phase 2 is single-threaded; ignoring -cores {cores}.");
+        }
+    }
+    let _ = args.validate;
+
+    run_solver(args, raws, first, last)
+}
+
+fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Result<(), String> {
+    let yasc_mode = args.out_file.is_some();
+    let solution_path = match &args.out_file {
+        Some(path) => path.clone(),
+        None => args.out_dir.join("solutions.sok"),
+    };
+    let times_path = args.out_dir.join("times.txt");
+
+    if !yasc_mode {
+        fs::create_dir_all(&args.out_dir)
+            .map_err(|err| format!("{}: {err}", args.out_dir.display()))?;
+    } else if let Some(parent) = solution_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|err| format!("{}: {err}", parent.display()))?;
+        }
+    }
+
+    write_solutions_header(&solution_path, &args.levels, SOLVER_NAME)
+        .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+    if !yasc_mode {
+        write_times_header(&times_path, SOLVER_NAME)
+            .map_err(|err| format!("{}: {err}", times_path.display()))?;
+    }
+
+    let log_max_nodes = tree_log_size(args);
+    let mut record = 0usize;
+    let mut total_levels = 0usize;
+    let mut solved_levels = 0usize;
+    let mut total_moves = 0usize;
+    let mut total_pushes = 0usize;
+    let mut total_elapsed = Duration::ZERO;
+
+    for (index, raw) in raws.into_iter().enumerate() {
+        let level_number = index + 1;
+        if level_number < first || level_number > last {
+            continue;
+        }
+
+        record += 1;
+        total_levels += 1;
+        let level_started = Instant::now();
+        let title = raw.title.clone();
+
+        println!();
+        println!("Level {level_number}: {title}");
+
+        if let Some(initial) = raw.board {
+            append_level_to_solutions(&solution_path, level_number, &title, &initial)
+                .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+        }
+
+        let level = match Level::preprocess(raw) {
+            Ok(level) => level,
+            Err(err) => {
+                record_failure(
+                    yasc_mode,
+                    &times_path,
+                    record,
+                    level_started.elapsed(),
+                    err.reason(),
+                    &title,
+                )?;
+                total_elapsed += level_started.elapsed();
+                println!("  failed: {}", err.reason());
+                continue;
+            }
+        };
+
+        let analysis_clock = SearchClock::new(Some(Duration::from_secs(args.time)), None);
+        let ctx = match LevelContext::analyse(level, &analysis_clock) {
+            Ok(ctx) => ctx,
+            Err(err) => {
+                record_failure(
+                    yasc_mode,
+                    &times_path,
+                    record,
+                    level_started.elapsed(),
+                    err.reason(),
+                    &title,
+                )?;
+                total_elapsed += level_started.elapsed();
+                println!("  analysis failed: {}", err.reason());
+                continue;
+            }
+        };
+
+        let remaining = Duration::from_secs(args.time).saturating_sub(level_started.elapsed());
+        let config = FessConfig {
+            time_limit: if args.max_expansions.is_some() {
+                None
+            } else {
+                Some(remaining)
+            },
+            max_expansions: args.max_expansions,
+            log_max_nodes,
+            save_best: args.save_best,
+        };
+
+        let outcome = match solve_forward(&ctx, &config) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                record_failure(
+                    yasc_mode,
+                    &times_path,
+                    record,
+                    level_started.elapsed(),
+                    err.reason(),
+                    &title,
+                )?;
+                total_elapsed += level_started.elapsed();
+                println!("  solve failed: {}", err.reason());
+                continue;
+            }
+        };
+
+        if !outcome.lurd.is_empty() {
+            append_solution(&solution_path, &outcome.lurd)
+                .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+        }
+        append_solution_time(&solution_path, level_started.elapsed(), SOLVER_NAME)
+            .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+
+        let failure_reason = outcome.failure_reason.unwrap_or("Unknown reason");
+        if !yasc_mode {
+            append_times_row(
+                &times_path,
+                record,
+                level_started.elapsed(),
+                SOLVER_NAME,
+                outcome.solved,
+                failure_reason,
+                if outcome.solved { outcome.moves } else { 0 },
+                if outcome.solved { outcome.pushes } else { 0 },
+                &title,
+            )
+            .map_err(|err| format!("{}: {err}", times_path.display()))?;
+        }
+
+        if outcome.solved {
+            solved_levels += 1;
+            total_moves += outcome.moves;
+            total_pushes += outcome.pushes;
+            println!(
+                "  SOLVED: {} moves ({} pushes), {} expansions, {:.3}s",
+                outcome.moves,
+                outcome.pushes,
+                outcome.expansions,
+                outcome.elapsed.as_secs_f64()
+            );
+        } else {
+            println!(
+                "  not solved: {} ({} expansions, {:.3}s)",
+                failure_reason,
+                outcome.expansions,
+                outcome.elapsed.as_secs_f64()
+            );
+        }
+        total_elapsed += level_started.elapsed();
+    }
+
+    if !yasc_mode {
+        write_times_footer(
+            &times_path,
+            total_levels,
+            solved_levels,
+            total_moves,
+            total_pushes,
+            total_elapsed,
+        )
+        .map_err(|err| format!("{}: {err}", times_path.display()))?;
+        println!();
+        println!(
+            "Solved {solved_levels}/{total_levels} levels. Results: {}",
+            times_path.display()
+        );
+    } else {
+        println!();
+        println!(
+            "Solved {solved_levels}/{total_levels} levels. Solutions: {}",
+            solution_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn record_failure(
+    yasc_mode: bool,
+    times_path: &Path,
+    record: usize,
+    elapsed: Duration,
+    reason: &str,
+    title: &str,
+) -> Result<(), String> {
+    if yasc_mode {
+        return Ok(());
+    }
+    append_times_row(
+        times_path,
+        record,
+        elapsed,
+        SOLVER_NAME,
+        false,
+        reason,
+        0,
+        0,
+        title,
+    )
+    .map_err(|err| format!("{}: {err}", times_path.display()))?;
+    Ok(())
+}
+
+fn tree_log_size(args: &Args) -> u32 {
+    let base = args.tree_log_size.unwrap_or(BASE_TREE_LOG_SIZE) as i32;
+    (base + args.extra_mem).clamp(14, 23) as u32
+}
+
+fn run_analysis(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Result<(), String> {
     for (index, raw) in raws.into_iter().enumerate() {
         let level_number = index + 1;
         if level_number < first || level_number > last {
