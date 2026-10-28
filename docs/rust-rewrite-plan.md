@@ -1418,6 +1418,12 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 - 稳定性：Miri 共享状态子集通过；fuzz 60 s/目标（parser 179,628 次、LURD 286,687 次、move 433 次）无崩溃；`cargo fmt --check`、`clippy -D warnings`、115 个单元测试、`cargo deny check` 全绿。
 - 回归：G3 238,928 盘面/轮 0 差异；G6 八策略步数/推数与 C++ 完全一致，1/2/4/8 核零差异，语料 155/155 + 20/20。
 
+**Phase 7 后续优化（2026-10-28）**
+
+- 跨关复用 worker：`Solver` 在整次运行中持有每核一份 tree/helper，关卡间只重建 MPDB2/rooms/envelope 等关卡相关表；死锁缓存改用代际计数清零（O(1)）。每关准备：Microban 单核 5.38 → 1.80 s、8 核 37.25 → 3.36 s，XSokoban 1–20 单核 1.67 → 1.22 s。
+- 同日配对计时：Microban 单核 0.646（原 0.824）、8 核 0.377（原 0.568）、XSokoban 1–20 单核 1.049（原 1.067，当日多次 0.985–1.068）。峰值 RSS 0.221×/0.222×（缓存条目 16 → 24 字节，仍远低于 1.20）。
+- 等价性：118 个单元测试、G3（0 盘面/走法差异、0 缓存开关差异）、G6（八策略步数完全一致、1/2/4/8 核零差异、语料 155/155 + 20/20）全部通过；细节见 `reference/BASELINE.md`。
+
 **Phase 7 有意保留的差异/未完成**
 
 - 24 小时 soak 未执行；已记录 600 s soak，完整命令为 `G7_PIN_CPU=1 G7_SOAK_SECONDS=86400 scripts/run_g7.sh`。

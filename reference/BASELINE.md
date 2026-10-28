@@ -589,6 +589,56 @@ fd9e36c92bb1fa09d5a2937cd99013e7c4c85b0a7cda2124001d57548a7f27e3 *target/g7/fuzz
 16eec2706f4a85b3f8b59718938ee885b4f8ba7490c0a1a10cf0c02b72f07299 *target/g7/fuzz-moves.log
 ```
 
+### Follow-up: cross-level worker reuse (2026-10-28)
+
+`Solver` keeps one tree and helper per core for the whole level set, as C++
+`search_trees[]`/`helpers[]` do, and `DeadlockCache` resets with a generation
+counter instead of rewriting its 4M entries. Level-specific tables (MPDB2,
+pull MPDB2, rooms, envelopes, stuck patterns) are still rebuilt per level and
+per worker, as `preprocess_level` does.
+
+Per-level setup measured with `--time 0` (no search; Microban 1–155,
+XSokoban 1–20):
+
+| Setup | before | after |
+|---|---|---|
+| Microban, 1 core | 5.38 s | 1.80 s |
+| Microban, 8 cores | 37.25 s | 3.36 s |
+| XSokoban 1–20, 1 core | 1.67 s | 1.22 s |
+
+Same-day paired runs, pinned to CPU 0 for one core, best run of 2–5. The host
+ran faster than on the Gate day (C++ Microban 1–155 took 16.9–20.4 s instead
+of 23.6 s), so only ratios are comparable:
+
+| Metric | C++ | Rust | Rust / C++ | Before |
+|---|---|---|---|---|
+| Microban 1–155, 1 core | 16,878 ms | 10,900 ms | 0.646 | 0.824 |
+| Microban 1–155, 8 cores | 94,922 ms | 38,399 ms | 0.377 | 0.568 |
+| XSokoban 1–20, 1 core | 11,168 ms | 11,712 ms | 1.049 | 1.067 (Gate), 1.09 same day |
+
+XSokoban individual run pairs ranged 0.985–1.068; the remaining difference is
+search time on levels 15/16/18, not setup (which is now at C++ parity).
+
+Peak RSS (XSokoban 16): 166.5 MB on one core (0.221× C++ 754.1 MB) and
+1,310.7 MB on eight cores (0.222× C++ 5,895.9 MB). Cache entries grew from 16
+to 24 bytes to hold the generation, so Rust RSS rose from 0.177×/0.175×;
+both remain far below the 1.20 limit.
+
+Stability after the change: a 90 s soak (8 workers, 3,000 expansions per
+level) ran 1,323 iterations, 1,323 solved, 0 failures, RSS mean drift 1.008.
+Gate G3 (238,928 boards, 0 board/move mismatches, 0 cache-off verdict
+differences, 12/12 smoke, 40/40 replay) and Gate G6 (SNAIL 178 levels with 0
+mismatches, eight strategies with identical move/push totals, 1/2/4/8-core 0
+solve-set differences, Microban 155/155 and XSokoban 20/20 with 0 invalid
+solutions) pass unchanged; 118 unit tests pass.
+
+```text
+36910d60adefc8dc843e0258891d18b2f8284bf6f349f7222e0f5980f207aa7f *target/g7/opt-g3.log
+c33954abdb06e22a4026e713bf87679053bfb744f637241d0d708558b182493d *target/g7/opt-g6.log
+5b358143531244aa4a44268ed13ad704ed30b3d3e7ecb637506e32311a0b557c *target/g7/opt-soak/stdout.log
+11d2ab2aa8b2ebb4d30c8607bc1581d4f5e18655b68147381aaf097614e21c8a *target/g7/opt-soak/rss.csv
+```
+
 ## Still missing
 
 - The 24-hour soak acceptance run has not been executed; the recorded soak is
