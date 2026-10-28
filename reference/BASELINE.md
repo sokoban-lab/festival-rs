@@ -639,6 +639,59 @@ c33954abdb06e22a4026e713bf87679053bfb744f637241d0d708558b182493d *target/g7/opt-
 11d2ab2aa8b2ebb4d30c8607bc1581d4f5e18655b68147381aaf097614e21c8a *target/g7/opt-soak/rss.csv
 ```
 
+### Follow-up: BFS/connectivity scratch removal (2026-10-28)
+
+Per-node profiling with temporary phase timers and a counting allocator
+(reverted afterwards) located the remaining XSokoban gap in `Graph::build`:
+its `init_shift` step calls `mark_connectivities_around_place` once per free
+cell, which was 30–40% of search time on XSokoban 16/18 and 1.5× C++ per
+build. Three Rust-only costs caused the difference: `init_dist` filled all
+2,601 cells instead of the logical rectangle (C++ clears only `height × width`),
+every BFS zeroed two 5.2 KB stack queues (C++ leaves its stack arrays
+uninitialized), and component marking copied a whole local distance board per
+BFS. The port now fills only the rectangle, uses one FIFO queue, and labels
+components directly in the output array; the observed semantics (INF for
+unreachable, component ids / neighbour colours) are unchanged.
+
+Instrumented XSokoban 18, strategy A (same-session pairs):
+
+| Per-node item | Rust before | Rust after | C++ |
+|---|---|---|---|
+| `Graph::build` | 186.9 µs | 139.4 µs | 144.7 µs |
+| BFS call (870,901 vs 871,216 calls) | 938 ns | 996 ns | 760 ns |
+| `init_dist` call | 129 ns | 40 ns | 65 ns |
+| connectivity marking call | 1885 ns | 1373 ns | 1388 ns |
+
+Same-day paired wall clock (one core pinned to CPU 0, 60 s per level):
+
+| Run | Rust | C++ | Ratio | Before |
+|---|---|---|---|---|
+| XSokoban 1–20 | 10,821 / 10,738 / 10,729 ms | 11,248 / 11,341 / 11,194 ms | 0.962 / 0.947 / 0.958 | 1.049 |
+| Microban 1–155 | 9,587 / 9,532 ms | 17,059 / 16,823 ms | 0.562 / 0.567 | 0.646 |
+| XS 15 | 2,736 / 2,663 ms | 2,581 / 2,537 ms | 1.060 / 1.050 | 1.037–1.064 |
+| XS 16 | 2,219 / 2,220 ms | 2,164 / 2,129 ms | 1.025 / 1.043 | 1.062–1.085 |
+| XS 18 | 2,648 / 2,720 ms | 2,764 / 2,734 ms | 0.958 / 0.995 | 1.133–1.140 |
+| Microban 1–155, 8 cores | 13,246–13,810 ms | 120,307–124,075 ms | 0.109–0.115 | 0.377 |
+
+The 8-core wall clock is dominated by when the first strategy solves a level
+and the other cores observe the cancellation flag, so it is not a clean
+per-node comparison; the host was also slower than on the Gate G7 day (C++
+122 s instead of 95 s). The single-core rows are the comparable measurements.
+
+Verification: 118 unit tests pass; Gate G3 (238,928 boards, 0 board/move
+mismatches, 0 false positives/negatives, 0 cache-off differences, 40/40 replay
+valid); Gate G6 (eight strategies with identical move/push totals,
+1/2/4/8-core solve sets identical, Microban 155/155 and XSokoban 20/20 with 0
+invalid solutions). The 90-level XSokoban set solves 89/90 on both sides with 0
+solve-set differences (92,899 vs 92,923 moves, 28,379 vs 28,381 pushes, 89/89
+replay valid), and Microban 155/155 replays valid.
+
+```text
+973bac580dadf66dc72c6cb1894e81e65aa611f47bc72a75c2eee2164ef45789 *target/g7/bfs-g3.log
+7acb8eb899ccea649e17c90a937c056a709ee1c980050aca956045f1848c0a58 *target/g7/bfs-g6.log
+7f375283ee491979cfe362c5ac79ceb04ecfd34348db6deeb74a4d047a1710f4 *target/g7/bfs-timings.txt
+```
+
 ## Still missing
 
 - The 24-hour soak acceptance run has not been executed; the recorded soak is

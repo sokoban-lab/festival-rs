@@ -18,7 +18,7 @@ before the next one starts.
 | Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
 | Phase 5 | complete (GIRL/Dragonfly, Gate G5) | GIRL value function and ε-greedy tree descent, Dragonfly priority-queue pull search, NAIVE forward scoring, strategies C/H, GIRL score/value differential |
 | Phase 6 | complete (scheduler/multicore, Gate G6) | SNAIL/NETLOCK detection and scoring, 8-strategy schedule, 1/2/4/8-core workers with shared perimeter and atomic cancellation, `-save_best`, XSokoban corpus, snail-state differential |
-| Phase 7 | complete (performance/memory/stability, Gate G7; 24 h soak pending) | scratch/graph reuse, cross-level worker reuse, generation-cleared deadlock cache, C++-equivalent phase clock, stack BFS buffers, `try_reserve` failure path, parser/LURD/move fuzzing, RSS soak harness |
+| Phase 7 | complete (performance/memory/stability, Gate G7; 24 h soak pending) | scratch/graph reuse, cross-level worker reuse, generation-cleared deadlock cache, C++-equivalent phase clock, rectangle-init single-queue BFS with direct component marking, `try_reserve` failure path, parser/LURD/move fuzzing, RSS soak harness |
 
 The CLI runs the same reverse-packing → plan → forward-FESS structure as C++.
 Without `-alg` it runs the eight-strategy schedule over 1/2/4/8 workers, like
@@ -29,10 +29,11 @@ C++ and identical total moves/pushes; strategy H (Dragonfly + NAIVE) solves
 80/80 with a 0.3% quality difference (Gate G5). With `-cores 1` the schedule
 solves the same Microban 155 and XSokoban 1–20 sets as C++ (Gate G6), and
 1/2/4/8-core runs match C++ on Microban 1–40. Every Rust solution replays
-independently. Pinned single-core runtime is 0.65–0.68× (Microban 1–155) and
-1.02–1.07× (XSokoban 1–20) of C++, 8-core throughput is 2.4–2.7× C++, and peak
-RSS is 0.22× (Gate G7 plus the follow-up worker reuse; the 24-hour soak is
-still pending).
+independently. Pinned single-core runtime is 0.56–0.57× (Microban 1–155) and
+0.95–0.96× (XSokoban 1–20) of C++; paired 8-core Microban 1–155 finishes in
+0.11× C++'s wall clock (cancellation-dominated, see `reference/BASELINE.md`),
+and peak RSS is 0.22× (Gate G7 plus the worker-reuse and BFS follow-ups; the
+24-hour soak is still pending).
 
 `-cores` accepts 1/2/4/8 and defaults to the host processor count capped at 8.
 Each worker owns its tree, helper and deadlock state; the perimeter and the
