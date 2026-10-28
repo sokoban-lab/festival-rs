@@ -22,6 +22,9 @@ use festival_core::solver::{
 };
 use festival_core::{Level, LevelContext, SearchClock};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const SOLVER_NAME: &str = "Festival 3.1";
 const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
 const BASE_TREE_LOG_SIZE: u32 = 20;

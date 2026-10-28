@@ -17,10 +17,12 @@ festival-core = { path = "crates/festival-core" }
 log = "0.4"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+mimalloc = "0.1"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
+panic = "abort"
 
 [profile.bench]
 lto = "thin"

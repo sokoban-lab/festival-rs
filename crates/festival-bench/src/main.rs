@@ -23,6 +23,9 @@ use festival_core::search::helper::Helper;
 use festival_core::search::snail::{SnailParams, fill_netlock_scores, fill_snail_scores};
 use festival_core::{Level, LevelContext, SearchClock};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args_os()
         .skip(1)
