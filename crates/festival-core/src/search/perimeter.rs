@@ -3,11 +3,12 @@
 
 //! Search frontier (`perimeter.cpp`).
 //!
-//! The C++ version uses a fixed open-addressed table shared by cores. Phase 2
-//! runs a single forward search, so a hash map with the same entry/update
-//! semantics is enough; the table moves behind `SharedRun` in Phase 6.
+//! The C++ table is global and shared by all cores behind one mutex. Here the
+//! table lives behind a `Mutex` so a scheduler can hand the same perimeter to
+//! every worker thread; single-core calls take an uncontended lock.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::constants::SearchMode;
 use crate::moves::apply_move;
@@ -21,34 +22,39 @@ struct Entry {
     alg: u8,
 }
 
+#[derive(Debug, Default)]
+struct Table {
+    entries: HashMap<u64, Entry>,
+    total_entries: usize,
+}
+
 #[derive(Debug)]
 pub struct Perimeter {
-    entries: HashMap<u64, Entry>,
+    table: Mutex<Table>,
     log_size: u32,
-    total_entries: usize,
 }
 
 impl Perimeter {
     pub fn new(log_size: u32) -> Self {
         Self {
-            entries: HashMap::new(),
+            table: Mutex::new(Table::default()),
             log_size,
-            total_entries: 0,
         }
     }
 
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.total_entries = 0;
+    pub fn clear(&self) {
+        let mut table = self.table.lock().expect("perimeter mutex");
+        table.entries.clear();
+        table.total_entries = 0;
     }
 
     pub fn total_entries(&self) -> usize {
-        self.total_entries
+        self.table.lock().expect("perimeter mutex").total_entries
     }
 
     pub fn is_full(&self) -> bool {
         let limit = 1usize << (self.log_size - 1);
-        self.total_entries >= limit
+        self.total_entries() >= limit
     }
 
     fn update(entry: &mut Entry, depth: u16, side: u8, alg: u8) {
@@ -77,13 +83,19 @@ impl Perimeter {
         entry.alg = alg;
     }
 
-    fn store(&mut self, hash: u64, depth: u16, side: u8, alg: u8) {
-        if let Some(entry) = self.entries.get_mut(&hash) {
+    fn store_in(table: &mut Table, hash: u64, depth: u16, side: u8, alg: u8) {
+        if let Some(entry) = table.entries.get_mut(&hash) {
             Self::update(entry, depth, side, alg);
             return;
         }
-        self.entries.insert(hash, Entry { depth, side, alg });
-        self.total_entries += 1;
+        table.entries.insert(hash, Entry { depth, side, alg });
+        table.total_entries += 1;
+    }
+
+    #[cfg(test)]
+    fn store(&self, hash: u64, depth: u16, side: u8, alg: u8) {
+        let mut table = self.table.lock().expect("perimeter mutex");
+        Self::store_in(&mut table, hash, depth, side, alg);
     }
 
     /// Port of `get_hash_without_bases`: BASE_SEARCH perimeter entries ignore
@@ -127,7 +139,7 @@ impl Perimeter {
     /// Port of `insert_node_into_perimeter`; returns the number of inserted
     /// entries (including updates), like the C++ counter.
     pub fn insert_node(
-        &mut self,
+        &self,
         ctx: &LevelContext,
         tree: &Tree,
         expansion: u32,
@@ -146,30 +158,33 @@ impl Perimeter {
         let side = tree.pull_mode as u8;
         let alg = tree.search_mode as u8;
 
-        let mut count = 0;
-        self.store(node_hash, e.depth as u16, side, alg);
-        count += 1;
-
-        if !with_sons {
-            return count;
+        let mut entries = Vec::with_capacity(1 + usize::from(with_sons) * e.moves_num as usize);
+        entries.push((node_hash, e.depth as u16));
+        if with_sons {
+            let start = e.move_hash_place;
+            for offset in 0..e.moves_num as usize {
+                let hash = if tree.search_mode == SearchMode::BaseSearch {
+                    Self::hash_without_bases(ctx, tree, expansion, Some(offset))
+                } else {
+                    tree.move_hashes[start + offset].hash
+                };
+                entries.push((hash, (e.depth + 1) as u16));
+            }
         }
 
-        let start = e.move_hash_place;
-        for offset in 0..e.moves_num as usize {
-            let hash = if tree.search_mode == SearchMode::BaseSearch {
-                Self::hash_without_bases(ctx, tree, expansion, Some(offset))
-            } else {
-                tree.move_hashes[start + offset].hash
-            };
-            self.store(hash, (e.depth + 1) as u16, side, alg);
-            count += 1;
+        let mut table = self.table.lock().expect("perimeter mutex");
+        for (hash, depth) in &entries {
+            Self::store_in(&mut table, *hash, *depth, side, alg);
         }
-        count
+        entries.len()
     }
 
     /// Returns the stored depth when `hash` is on `side`.
     pub fn is_in(&self, hash: u64, side: u8) -> Option<u16> {
-        self.entries
+        self.table
+            .lock()
+            .expect("perimeter mutex")
+            .entries
             .get(&hash)
             .filter(|entry| entry.side == side)
             .map(|entry| entry.depth)
@@ -178,9 +193,10 @@ impl Perimeter {
     /// `dragonfly_mark_visited_hashes`: `1` for an earlier dragonfly visit,
     /// a negative attractive distance for a forward-frontier hit, else `0`.
     pub fn mark_dragonfly_visited(&self, hashes: &[u64]) -> Vec<i32> {
+        let table = self.table.lock().expect("perimeter mutex");
         hashes
             .iter()
-            .map(|hash| match self.entries.get(hash) {
+            .map(|hash| match table.entries.get(hash) {
                 Some(entry) if entry.alg == SearchMode::Dragonfly as u8 => 1,
                 Some(entry) if entry.side == 0 => -2000 + entry.depth as i32,
                 _ => 0,
@@ -189,14 +205,15 @@ impl Perimeter {
     }
 
     /// `dragonfly_update_perimeter`.
-    pub fn update_dragonfly(&mut self, hashes: &[u64], visited: &[i32], depth: u16) {
+    pub fn update_dragonfly(&self, hashes: &[u64], visited: &[i32], depth: u16) {
         let alg = SearchMode::Dragonfly as u8;
+        let mut table = self.table.lock().expect("perimeter mutex");
         for (index, &hash) in hashes.iter().enumerate() {
             if visited.get(index).copied().unwrap_or(0) == 1 {
                 continue;
             }
 
-            if let Some(entry) = self.entries.get_mut(&hash) {
+            if let Some(entry) = table.entries.get_mut(&hash) {
                 if entry.side == 1 {
                     if depth < entry.depth {
                         entry.depth = depth;
@@ -206,7 +223,7 @@ impl Perimeter {
                 }
             }
 
-            self.entries.insert(
+            table.entries.insert(
                 hash,
                 Entry {
                     depth,
@@ -214,7 +231,7 @@ impl Perimeter {
                     alg,
                 },
             );
-            self.total_entries += 1;
+            table.total_entries += 1;
         }
     }
 }
@@ -252,7 +269,7 @@ mod tests {
 
     #[test]
     fn pull_side_wins_perimeter() {
-        let mut perimeter = Perimeter::new(8);
+        let perimeter = Perimeter::new(8);
         perimeter.store(7, 4, 0, 0);
         perimeter.store(7, 6, 1, 0);
         assert_eq!(perimeter.is_in(7, 1), Some(6));
@@ -261,10 +278,39 @@ mod tests {
 
     #[test]
     fn shallower_depth_updates() {
-        let mut perimeter = Perimeter::new(8);
+        let perimeter = Perimeter::new(8);
         perimeter.store(9, 5, 0, 0);
         perimeter.store(9, 2, 0, 0);
         assert_eq!(perimeter.is_in(9, 0), Some(2));
+    }
+
+    #[test]
+    fn concurrent_access_is_synchronized() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // The perimeter is the only shared mutable state handed to scheduler
+        // threads; exercise it from several threads under Miri.
+        let perimeter = Arc::new(Perimeter::new(10));
+        let solved = Arc::new(AtomicBool::new(false));
+        std::thread::scope(|scope| {
+            for thread in 0..4u64 {
+                let perimeter = Arc::clone(&perimeter);
+                let solved = Arc::clone(&solved);
+                scope.spawn(move || {
+                    for i in 0..500u64 {
+                        let hash = i * 8 + thread;
+                        perimeter.store(hash, 3, 0, 0);
+                        assert_eq!(perimeter.is_in(hash, 0), Some(3));
+                        if i == 250 {
+                            solved.store(true, Ordering::Relaxed);
+                        }
+                        let _ = solved.load(Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(perimeter.total_entries(), 2000);
     }
 
     #[test]

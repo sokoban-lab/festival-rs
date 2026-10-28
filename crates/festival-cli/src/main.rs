@@ -9,13 +9,17 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use festival_core::constants::MAX_INNER;
+use festival_core::io::lurd;
 use festival_core::io::sok::{RawLevel, load_levels, resolve_level_file};
 use festival_core::io::solution::{
     append_level_to_solutions, append_solution, append_solution_time, append_times_row,
     write_solutions_header, write_times_footer, write_times_header,
 };
 use festival_core::search::FessConfig;
-use festival_core::solver::{StrategyConfig, solve_forward, solve_strategy, strategy_supported};
+use festival_core::solver::{
+    CORE_COUNTS, SchedulerConfig, SolveOutcome, default_cores, solve_forward, solve_level,
+    strategy_supported,
+};
 use festival_core::{Level, LevelContext, SearchClock};
 
 const SOLVER_NAME: &str = "Festival 3.1";
@@ -25,7 +29,7 @@ const BASE_TREE_LOG_SIZE: u32 = 20;
 #[derive(Debug, Parser)]
 #[command(
     name = "festival-rs",
-    about = "Festival 3.1 Rust port. Phase 4: reverse packing, planning and HF strategies.",
+    about = "Festival 3.1 Rust port: all strategies and the 1/2/4/8-core scheduler.",
     disable_help_subcommand = true
 )]
 struct Args {
@@ -54,9 +58,11 @@ struct Args {
     #[arg(long = "save_best")]
     save_best: bool,
 
+    /// Worker threads: 1/2/4/8. Defaults to the machine, like C++.
     #[arg(long = "cores", value_name = "N")]
     cores: Option<usize>,
 
+    /// Force one strategy (0..7). Without it the eight-strategy schedule runs.
     #[arg(long = "alg", value_name = "N")]
     alg: Option<i32>,
 
@@ -131,7 +137,7 @@ fn normalized_args() -> Vec<OsString> {
 
 fn run(args: &Args) -> Result<(), String> {
     if let Some(cores) = args.cores {
-        if !matches!(cores, 1 | 2 | 4 | 8) {
+        if !CORE_COUNTS.contains(&cores) {
             return Err("Number of cores should be 1/2/4/8".to_string());
         }
     }
@@ -158,22 +164,43 @@ fn run(args: &Args) -> Result<(), String> {
         return run_analysis(args, raws, first, last);
     }
 
-    if !args.forward_only && args.alg.is_none() {
-        println!(
-            "note: runs strategy A by default; full 8-strategy scheduling arrives in Phase 6."
-        );
+    let cores = args.cores.unwrap_or_else(default_cores);
+    if args.forward_only {
+        println!("note: --forward-only runs the Phase 2 NORMAL search on one thread.");
+    } else if let Some(alg) = args.alg {
+        println!("using {cores} thread(s); forced strategy {alg}");
+    } else {
+        println!("using {cores} thread(s); scheduling strategies A-H");
     }
-    if let Some(cores) = args.cores {
-        if cores > 1 {
-            println!("note: Phase 4 is single-threaded; ignoring -cores {cores}.");
-        }
-    }
-    let _ = args.validate;
 
-    run_solver(args, raws, first, last)
+    run_solver(args, raws, first, last, cores)
 }
 
-fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Result<(), String> {
+/// Per-level outcome normalized across the scheduler and `--forward-only`.
+struct LevelResult {
+    solved: bool,
+    failure_reason: Option<&'static str>,
+    solutions: Vec<SolveOutcome>,
+    reported: Option<SolveOutcome>,
+    expansions: u64,
+    elapsed: Duration,
+}
+
+fn solution_list(outcomes: &[SolveOutcome]) -> Vec<SolveOutcome> {
+    outcomes
+        .iter()
+        .filter(|outcome| !outcome.lurd.is_empty())
+        .cloned()
+        .collect()
+}
+
+fn run_solver(
+    args: &Args,
+    raws: Vec<RawLevel>,
+    first: usize,
+    last: usize,
+    cores: usize,
+) -> Result<(), String> {
     let yasc_mode = args.out_file.is_some();
     let solution_path = match &args.out_file {
         Some(path) => path.clone(),
@@ -214,6 +241,7 @@ fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Re
         record += 1;
         total_levels += 1;
         let level_started = Instant::now();
+        let level_epoch = epoch_secs();
         let title = raw.title.clone();
 
         println!();
@@ -259,9 +287,11 @@ fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Re
             }
         };
 
-        let remaining = Duration::from_secs(args.time).saturating_sub(level_started.elapsed());
+        // C++ budgets with `time(0)`; compare epoch seconds so the remaining
+        // whole-second count matches even when preprocessing straddles a tick.
+        let remaining = Duration::from_secs(args.time.saturating_sub(epoch_secs() - level_epoch));
 
-        let outcome = if args.forward_only {
+        let result = if args.forward_only {
             let config = FessConfig {
                 time_limit: if args.max_expansions.is_some() {
                     None
@@ -271,75 +301,147 @@ fn run_solver(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Re
                 max_expansions: args.max_expansions,
                 log_max_nodes,
                 save_best: args.save_best,
+                cancel: None,
             };
-            solve_forward(&ctx, &config)
+            match solve_forward(&ctx, &config) {
+                Ok(outcome) => {
+                    let expansions = outcome.expansions;
+                    let elapsed = outcome.elapsed;
+                    let solutions = solution_list(std::slice::from_ref(&outcome));
+                    LevelResult {
+                        solved: outcome.solved,
+                        failure_reason: outcome.failure_reason,
+                        solutions,
+                        reported: Some(outcome),
+                        expansions,
+                        elapsed,
+                    }
+                }
+                Err(err) => {
+                    record_failure(
+                        yasc_mode,
+                        &times_path,
+                        record,
+                        level_started.elapsed(),
+                        err.reason(),
+                        &title,
+                    )?;
+                    total_elapsed += level_started.elapsed();
+                    println!("  solve failed: {}", err.reason());
+                    continue;
+                }
+            }
         } else {
-            let alg = args.alg.unwrap_or(0) as usize;
-            let config = StrategyConfig {
+            let config = SchedulerConfig {
+                cores,
+                forced_alg: args.alg.map(|alg| alg as usize),
                 time_limit: remaining,
                 max_expansions: args.max_expansions,
                 log_max_nodes,
                 save_best: args.save_best,
             };
-            solve_strategy(&ctx, alg, &config)
-        };
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                record_failure(
-                    yasc_mode,
-                    &times_path,
-                    record,
-                    level_started.elapsed(),
-                    err.reason(),
-                    &title,
-                )?;
-                total_elapsed += level_started.elapsed();
-                println!("  solve failed: {}", err.reason());
-                continue;
+            match solve_level(&ctx, &config) {
+                Ok(run) => {
+                    let solutions: Vec<SolveOutcome> =
+                        run.solutions(args.save_best).into_iter().cloned().collect();
+                    LevelResult {
+                        solved: run.solved,
+                        failure_reason: run.failure_reason,
+                        solutions,
+                        reported: run.reported(args.save_best).cloned(),
+                        expansions: run.expansions,
+                        elapsed: run.elapsed,
+                    }
+                }
+                Err(err) => {
+                    record_failure(
+                        yasc_mode,
+                        &times_path,
+                        record,
+                        level_started.elapsed(),
+                        err.reason(),
+                        &title,
+                    )?;
+                    total_elapsed += level_started.elapsed();
+                    println!("  solve failed: {}", err.reason());
+                    continue;
+                }
             }
         };
 
-        if !outcome.lurd.is_empty() {
-            append_solution(&solution_path, &outcome.lurd)
-                .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+        if args.validate {
+            for solution in &result.solutions {
+                if solution.lurd.is_empty() {
+                    continue;
+                }
+                let stats = lurd::replay(&ctx.level.initial, &solution.lurd)
+                    .map_err(|err| format!("level {level_number}: {err}"))?;
+                if solution.solved && !stats.solved {
+                    return Err(format!(
+                        "level {level_number}: independent LURD validator rejected the solution"
+                    ));
+                }
+            }
+        }
+
+        for solution in &result.solutions {
+            if !solution.lurd.is_empty() {
+                append_solution(&solution_path, &solution.lurd)
+                    .map_err(|err| format!("{}: {err}", solution_path.display()))?;
+            }
         }
         append_solution_time(&solution_path, level_started.elapsed(), SOLVER_NAME)
             .map_err(|err| format!("{}: {err}", solution_path.display()))?;
 
-        let failure_reason = outcome.failure_reason.unwrap_or("Unknown reason");
+        let mut failure_reason = result.failure_reason.unwrap_or("Unknown reason");
+        if !result.solved
+            && level_started.elapsed().as_secs() >= args.time
+            && failure_reason != "Too many moves"
+        {
+            failure_reason = "Time limit exceeded";
+        }
+        let (moves, pushes) = if result.solved {
+            result
+                .reported
+                .as_ref()
+                .map(|outcome| (outcome.moves, outcome.pushes))
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
         if !yasc_mode {
             append_times_row(
                 &times_path,
                 record,
                 level_started.elapsed(),
                 SOLVER_NAME,
-                outcome.solved,
+                result.solved,
                 failure_reason,
-                if outcome.solved { outcome.moves } else { 0 },
-                if outcome.solved { outcome.pushes } else { 0 },
+                moves,
+                pushes,
                 &title,
             )
             .map_err(|err| format!("{}: {err}", times_path.display()))?;
         }
 
-        if outcome.solved {
+        if result.solved {
             solved_levels += 1;
-            total_moves += outcome.moves;
-            total_pushes += outcome.pushes;
+            total_moves += moves;
+            total_pushes += pushes;
             println!(
-                "  SOLVED: {} moves ({} pushes), {} expansions, {:.3}s",
-                outcome.moves,
-                outcome.pushes,
-                outcome.expansions,
-                outcome.elapsed.as_secs_f64()
+                "  SOLVED: {} moves ({} pushes), {} expansions, {:.3}s, {} solution(s)",
+                moves,
+                pushes,
+                result.expansions,
+                result.elapsed.as_secs_f64(),
+                result.solutions.len().max(1)
             );
         } else {
             println!(
                 "  not solved: {} ({} expansions, {:.3}s)",
                 failure_reason,
-                outcome.expansions,
-                outcome.elapsed.as_secs_f64()
+                result.expansions,
+                result.elapsed.as_secs_f64()
             );
         }
         total_elapsed += level_started.elapsed();
@@ -400,6 +502,13 @@ fn record_failure(
 fn tree_log_size(args: &Args) -> u32 {
     let base = args.tree_log_size.unwrap_or(BASE_TREE_LOG_SIZE) as i32;
     (base + args.extra_mem).clamp(14, 23) as u32
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 fn run_analysis(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Result<(), String> {

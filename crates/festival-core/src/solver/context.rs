@@ -8,6 +8,7 @@ use crate::distance::{self, Distances};
 use crate::error::Result;
 use crate::level::Level;
 use crate::search::girl::GirlParams;
+use crate::search::snail::SnailParams;
 use crate::solver::clock::SearchClock;
 
 pub struct LevelContext {
@@ -16,6 +17,7 @@ pub struct LevelContext {
     pub rooms: Rooms,
     pub hotspots: Hotspots,
     pub girl: GirlParams,
+    pub snail: SnailParams,
 }
 
 impl LevelContext {
@@ -26,6 +28,7 @@ impl LevelContext {
         let rooms = analysis::rooms::analyse(&level, &level.board)?;
         let hotspots = analysis::hotspot::init(&level, &distances, clock.hotspot_abort_at());
         let girl = GirlParams::compute(&level);
+        let snail = SnailParams::detect(&level);
 
         Ok(Self {
             level,
@@ -33,6 +36,7 @@ impl LevelContext {
             rooms,
             hotspots,
             girl,
+            snail,
         })
     }
 }

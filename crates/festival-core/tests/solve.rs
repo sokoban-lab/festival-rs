@@ -32,6 +32,7 @@ fn forward_search_solves_smoke_levels() {
             max_expansions: Some(500_000),
             log_max_nodes: 18,
             save_best: false,
+            cancel: None,
         };
         let outcome = solve_forward(&ctx, &config)
             .unwrap_or_else(|err| panic!("level {level_number} ({title}): {err}"));
@@ -106,6 +107,7 @@ fn forward_search_is_deterministic_with_an_expansion_budget() {
         max_expansions: Some(500_000),
         log_max_nodes: 18,
         save_best: false,
+        cancel: None,
     };
     let first = solve_forward(&ctx, &config).unwrap();
     let second = solve_forward(&ctx, &config).unwrap();

@@ -25,6 +25,7 @@ fn config(time_limit: Duration) -> FessConfig {
         max_expansions: None,
         log_max_nodes: 20,
         save_best: false,
+        cancel: None,
     }
 }
 

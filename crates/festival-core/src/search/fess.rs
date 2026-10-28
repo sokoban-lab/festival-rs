@@ -27,6 +27,8 @@ pub struct FessConfig {
     pub max_expansions: Option<u64>,
     pub log_max_nodes: u32,
     pub save_best: bool,
+    /// Shared `any_core_solved` flag.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for FessConfig {
@@ -36,6 +38,7 @@ impl Default for FessConfig {
             max_expansions: None,
             log_max_nodes: 20,
             save_best: false,
+            cancel: None,
         }
     }
 }
@@ -118,15 +121,8 @@ pub fn run_fess(
     let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
     tree.prepare_deadlock(ctx)?;
     let mut helper = Helper::default();
-    let mut perimeter = Perimeter::new(config.log_max_nodes.min(22));
-    run_fess_into(
-        ctx,
-        config,
-        search_mode,
-        &mut tree,
-        &mut helper,
-        &mut perimeter,
-    )
+    let perimeter = Perimeter::new(config.log_max_nodes.min(22));
+    run_fess_into(ctx, config, search_mode, &mut tree, &mut helper, &perimeter)
 }
 
 /// Runs a forward FESS search on an existing tree. The deadline in `config`
@@ -137,7 +133,7 @@ pub fn run_fess_into(
     search_mode: SearchMode,
     tree: &mut Tree,
     helper: &mut Helper,
-    perimeter: &mut Perimeter,
+    perimeter: &Perimeter,
 ) -> Result<FessRun> {
     if config.time_limit == Some(Duration::ZERO) {
         return Ok(FessRun {
@@ -194,6 +190,10 @@ pub fn run_fess_into(
             } else {
                 SolveError::ResourceExhausted
             });
+            break;
+        }
+        if crate::search::cancelled(&config.cancel) {
+            failure = Some(SolveError::TimeLimit);
             break;
         }
 

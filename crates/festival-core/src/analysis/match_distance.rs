@@ -100,7 +100,15 @@ pub fn compute_imagine_distance(
 
     let boxes = level.indices_of_boxes(board);
     let targets = level.indices_of_boxes(imagined);
-    debug_assert_eq!(boxes.len(), targets.len(), "box num mismatch2");
+    if boxes.len() != targets.len() {
+        // A zero-length reverse phase leaves `imagined_hf_board` unset; C++
+        // aborts here, but a degraded score is safer for the scheduler.
+        base_score.dist_to_imagined = crate::constants::INF as i32;
+        for score in scores.iter_mut() {
+            score.dist_to_imagined = crate::constants::INF as i32;
+        }
+        return;
+    }
     let n = boxes.len();
 
     let mut matrix = CostMatrix::new(n);
@@ -212,7 +220,15 @@ pub fn compute_rev_distance(
 
     let boxes = level.indices_of_boxes(board);
     let bases = level.indices_of_boxes(base_board);
-    debug_assert_eq!(boxes.len(), bases.len(), "box num mismatch4");
+    if boxes.len() != bases.len() {
+        // C++ aborts on this mismatch; it only happens when a degenerate
+        // budget skipped `setup_rev_board`. Degrade instead of panicking.
+        base_score.dist_to_imagined = crate::constants::INF as i32;
+        for score in scores.iter_mut() {
+            score.dist_to_imagined = crate::constants::INF as i32;
+        }
+        return;
+    }
     let n = boxes.len();
 
     let mut matrix = CostMatrix::new(n);

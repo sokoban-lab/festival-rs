@@ -5,6 +5,7 @@
 //!
 //! Phase 4 adds the HF / BICON / MAX_DIST / REV families and the planning
 //! features (`packed_boxes`, `out_of_plan`, `imagine`, `dist_to_imagined`).
+//! Phase 6 adds the SNAIL / NETLOCK payloads.
 
 use crate::board::Board;
 use crate::constants::SearchMode;
@@ -12,6 +13,7 @@ use crate::planning::{imagine, oop, park_order};
 use crate::search::girl;
 use crate::search::helper::Helper;
 use crate::search::hf;
+use crate::search::snail;
 use crate::solver::LevelContext;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -66,16 +68,21 @@ pub fn is_better_score(
         return hf::is_better_rev_score(new_score, old_score, pull_mode);
     }
 
+    if search_mode == SearchMode::SnailSearch {
+        return snail::is_better_snail_score(new_score, old_score, pull_mode);
+    }
+
+    if search_mode == SearchMode::NetlockSearch {
+        return snail::is_better_netlock_score(new_score, old_score);
+    }
+
     if search_mode == SearchMode::GirlSearch {
         // The stored raw-feature value; see `ScoreElement::girl_value`.
         return new_score.girl_value > old_score.girl_value;
     }
 
-    // SNAIL / NETLOCK / K_DIST comparators are Phase 6 / deadlock-search only.
-    if matches!(
-        search_mode,
-        SearchMode::SnailSearch | SearchMode::NetlockSearch | SearchMode::KDistSearch
-    ) {
+    // The k-distance deadlock search compares positions directly.
+    if search_mode == SearchMode::KDistSearch {
         return false;
     }
 
@@ -196,6 +203,16 @@ pub fn score_board(
         return score;
     }
 
+    if search_mode == SearchMode::SnailSearch {
+        snail::fill_snail_scores(&ctx.snail, level, board, &mut score, helper.alg_type);
+        return score;
+    }
+
+    if search_mode == SearchMode::NetlockSearch {
+        snail::fill_netlock_scores(&ctx.snail, level, board, &mut score, helper.alg_type);
+        return score;
+    }
+
     score.boxes_on_targets = board.boxes_on_targets() as i16;
     score.connectivity = crate::bfs::get_connectivity(level, board) as i16;
     score.boxes_in_level = board.boxes_in_level() as i16;
@@ -233,8 +250,6 @@ pub fn score_board(
             return score;
         }
         SearchMode::Normal | SearchMode::BaseSearch | SearchMode::ForwardWithBases => {}
-        // SNAIL / NETLOCK are Phase 6; keep the base score instead of
-        // inventing semantics.
         _ => return score,
     }
 

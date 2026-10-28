@@ -28,6 +28,8 @@ use crate::solver::clock::SearchClock;
 pub struct PackingConfig {
     pub time_limit: Option<Duration>,
     pub max_expansions: Option<u64>,
+    /// Shared `any_core_solved` flag.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[derive(Debug)]
@@ -103,7 +105,7 @@ pub fn run_packing(
     ctx: &LevelContext,
     tree: &mut Tree,
     helper: &mut Helper,
-    perimeter: &mut Perimeter,
+    perimeter: &Perimeter,
     config: &PackingConfig,
     search_mode: SearchMode,
 ) -> Result<PackingRun> {
@@ -178,6 +180,10 @@ pub fn run_packing(
             } else {
                 SolveError::ResourceExhausted
             });
+            break;
+        }
+        if crate::search::cancelled(&config.cancel) {
+            failure = Some(SolveError::TimeLimit);
             break;
         }
 
@@ -346,17 +352,18 @@ mod tests {
         let mut tree = Tree::new_with_level(16, &ctx.level).unwrap();
         tree.prepare_deadlock(&ctx).unwrap();
         let mut helper = Helper::default();
-        let mut perimeter = Perimeter::new(16);
+        let perimeter = Perimeter::new(16);
         let config = PackingConfig {
             time_limit: None,
             max_expansions: Some(20_000),
+            cancel: None,
         };
 
         let run = run_packing(
             &ctx,
             &mut tree,
             &mut helper,
-            &mut perimeter,
+            &perimeter,
             &config,
             SearchMode::BaseSearch,
         )

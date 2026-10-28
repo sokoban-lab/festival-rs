@@ -2,7 +2,7 @@
 // Copyright 2018-2022 Yaron Shoham (solver); driver: festival-rs contributors.
 //
 // Build with scripts/build_refcheck.sh. This driver does not change solver
-// behavior; it only exposes board_is_deadlocked / move_is_deadlocked for
+// behavior; it exposes reference predicates, scores and search state for
 // differential testing against festival-rs.
 
 #include <stdio.h>
@@ -30,6 +30,7 @@
 #include "score.h"
 #include "girl.h"
 #include "dragonfly.h"
+#include "snail.h"
 
 extern dragonfly_node* dragonfly_nodes;
 extern int dragonfly_nodes_num;
@@ -41,6 +42,11 @@ void dragonfly_get_board(dragonfly_node* e, board b);
 
 void allocate_deadlock_cache();
 void read_deadlock_patterns(int pull_mode);
+extern int_board snail_dist;
+extern board snail_chain;
+extern board netlock_grid;
+extern int snail_target_y, snail_target_x;
+extern int snail_chain_len;
 extern tree search_trees[8];
 extern helper helpers[8];
 void allocate_search_trees();
@@ -675,6 +681,75 @@ static int run_girl_score(int argc, char** argv)
 	return 0;
 }
 
+static void print_snail_scores(const char* board_name, board b)
+{
+	score_element s;
+	int alg;
+
+	for (alg = 0; alg < 4; alg++)
+	{
+		memset(&s, 0, sizeof(s));
+		fill_snail_scores(b, &s, alg);
+		printf("snail-score %s %d %d %d %d %d %d\n",
+			board_name, alg, s.out_of_plan, s.dist_to_imagined,
+			s.biconnect, s.hotspots, s.boxes_on_targets);
+
+		memset(&s, 0, sizeof(s));
+		fill_netlock_scores(b, &s, alg);
+		printf("netlock-score %s %d %d %d %d %d\n",
+			board_name, alg, s.connectivity, s.boxes_on_targets,
+			s.rooms_score, s.imagine);
+	}
+}
+
+static int run_snail_state(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	board start;
+	int i, j;
+
+	(void)argc;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	printf("snail %d\n", snail_level_detected);
+	printf("netlock %d\n", netlock_level_detected);
+	printf("target %d %d\n", snail_target_y, snail_target_x);
+	printf("chain_len %d\n", snail_chain_len);
+	for (i = 0; i < height; i++)
+		for (j = 0; j < width; j++)
+			if (snail_chain[i][j])
+				printf("chain %d %d %d\n", i, j, snail_dist[i][j]);
+	for (i = 0; i < height; i++)
+		for (j = 0; j < width; j++)
+			if (netlock_grid[i][j])
+				printf("grid %d %d\n", i, j);
+
+	// `preprocess_level` leaves the preprocessed initial position in `start`.
+	board rev;
+	print_snail_scores("forward", start);
+	copy_board(start, rev);
+	enter_reverse_mode(rev, 0);
+	print_snail_scores("reverse0", rev);
+	copy_board(start, rev);
+	enter_reverse_mode(rev, 1);
+	print_snail_scores("reverse1", rev);
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
 	// The solver's main() processes -cores/-extra_mem before allocating the
@@ -725,6 +800,15 @@ int main(int argc, char** argv)
 		read_deadlock_patterns(0);
 		read_deadlock_patterns(1);
 		return run_girl_score(argc, argv);
+	}
+
+	if (argc >= 4 && strcmp(argv[1], "snail") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_snail_state(argc, argv);
 	}
 
 	fprintf(stderr,

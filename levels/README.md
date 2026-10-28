@@ -7,14 +7,22 @@
 - 1–3: single-box and multi-box pushes;
 - 4–6: corridors and horizontal/vertical tunnels;
 - 7–9: multi-room layouts;
-- 10–12: corner/deadlock traps.
+- 10–12: corner/deadlock trap levels.
 
-They are released with this repository and contain no third-party content.
+`levels/smoke/snail.sok` contains three self-authored pull-chain levels whose
+pull-order depth is 20 (SNAIL), 10 (NETLOCK) and 9 (control); they exercise
+the detection and scoring modes from Gate G6. They are detection/scoring
+fixtures rather than solvable puzzles (more targets than boxes).
+
+## Bundled corpora
+
+`levels/corpus/` contains Microban I (155 levels) and XSokoban (90 levels);
+see [`corpus/README.md`](corpus/README.md) for sources and licenses.
 
 ## External benchmarks
 
-The large regression sets are not vendored. Place them under `levels/` in this
-layout:
+Large regression sets are otherwise not vendored. Place them under `levels/`
+in this layout:
 
 ```text
 levels/Microban.sok

@@ -17,16 +17,25 @@ before the next one starts.
 | Phase 3 | complete (deadlock subsystem, Gate G3) | deadlock zone, corral/π-corral, positions arena, deadlock cache, advanced/matching/pull elimination, k-distance, XY, rooms, wobblers, mini search, MPDB2, stuck learning, cycle deadlock, envelope learning, C++ deadlock differential |
 | Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
 | Phase 5 | complete (GIRL/Dragonfly, Gate G5) | GIRL value function and ε-greedy tree descent, Dragonfly priority-queue pull search, NAIVE forward scoring, strategies C/H, GIRL score/value differential |
-| Phase 6+ | not started | 8-strategy scheduler, 1/2/4/8-core execution, shared deadlock/perimeter state |
+| Phase 6 | complete (scheduler/multicore, Gate G6) | SNAIL/NETLOCK detection and scoring, 8-strategy schedule, 1/2/4/8-core workers with shared perimeter and atomic cancellation, `-save_best`, XSokoban corpus, snail-state differential |
+| Phase 7 | not started | performance, memory and stability |
 
 The CLI runs the same reverse-packing → plan → forward-FESS structure as C++.
-`-alg 0` means strategy A (C++ compatible), and `--forward-only` keeps the
-Phase 2 NORMAL forward search. All eight strategies are available. Strategies
-0/1/3/4/5/6 solve Microban 1–80 with the same solve set as C++ (Gate G4).
-Strategy C (GIRL) has the same 78/80 solved set as C++ and identical total
-moves/pushes; strategy H (Dragonfly + NAIVE) solves 80/80 with a 0.3% quality
-difference (Gate G5). Every Rust solution replays independently. Multi-core
-scheduling remains Phase 6, so `-cores > 1` still runs single-threaded.
+Without `-alg` it runs the eight-strategy schedule over 1/2/4/8 workers, like
+C++; `-alg N` forces one strategy, and `--forward-only` keeps the Phase 2
+NORMAL forward search. All eight strategies solve Microban 1–80 with the same
+solve set as C++ (Gate G4). Strategy C (GIRL) has the same 78/80 solved set as
+C++ and identical total moves/pushes; strategy H (Dragonfly + NAIVE) solves
+80/80 with a 0.3% quality difference (Gate G5). With `-cores 1` the schedule
+solves the same Microban 155 and XSokoban 1–20 sets as C++ (Gate G6), and
+1/2/4/8-core runs match C++ on Microban 1–40. Every Rust solution replays
+independently.
+
+`-cores` accepts 1/2/4/8 and defaults to the host processor count capped at 8.
+Each worker owns its tree, helper and deadlock state; the perimeter and the
+`any_core_solved` cancellation flag are shared. SNAIL/NETLOCK levels are
+detected during preprocessing and switch strategies A/B/C to the corresponding
+scoring modes with the C++ time allocation.
 
 The deadlock subsystem remains the G3 implementation: 238,928 sampled boards
 with 0 verdict mismatches and a cache-on/cache-off invariant. Output files are
@@ -96,6 +105,18 @@ score/value differential):
 G5_TIME=60 scripts/run_g5.sh
 ```
 
+Reproduce Gate G6 (snail detection/scoring differential, eight strategies, 1/2/4/8-core
+schedules, Microban + XSokoban corpus):
+
+```sh
+G6_TIME=30 scripts/run_g6.sh
+```
+
+`G6_TIME` must be at least 24 s: C++ divides each strategy budget by three and
+aborts on a zero-length HF phase on one core. The corpus step uses
+`G6_CORPUS_TIME=120`, because XSokoban 14/16 and Microban 153 sit on the
+time-limit boundary at 30–60 s.
+
 Baseline commands, recorded results and per-level quality differences are in
 [`reference/BASELINE.md`](reference/BASELINE.md).
 
@@ -107,6 +128,11 @@ given solution file is written and `times.txt` is skipped.
 
 `--max-expansions N` disables the wall-clock limit, which makes runs
 reproducible for differential testing.
+
+Without `-alg` the eight-strategy schedule runs; `-alg N` forces one strategy.
+The forced choice is honored for every core count (C++ 3.1 ignores it when
+`-cores > 1`). `-cores` defaults to 1/2/4/8 rounded down from the available
+processors; C++ additionally checks RAM thresholds, which this port does not.
 
 A level argument containing `/`, `\` or `.` is used as a path. Otherwise it is
 resolved as `<out_dir>/levels/<name>.sok`, matching the C++ behavior. The
@@ -126,8 +152,8 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
                          XY, rooms, wobblers, mini, MPDB2, stuck, cycle
   src/search/            tree, heap, requests, scores, advisors, FESS loop,
                          packing search, HF/MAX_DIST scoring, GIRL/ε-greedy,
-                         Dragonfly, NAIVE, perimeter
-  src/solver/            strategy A–H runner, clocks, outcome
+                         Dragonfly, NAIVE, SNAIL/NETLOCK, perimeter
+  src/solver/            strategy A–H runner, 1/2/4/8-core scheduler, clocks
   src/planning/          park order, OOP, imagine/overlap, base matching, opener
   src/io/lurd.rs         independent LURD replay validator
   src/io/solution.rs     player-path BFS, LURD and result files
@@ -135,10 +161,11 @@ crates/festival-cli/     festival-rs binary
 crates/festival-bench/   static analysis CSV, deadlock differential, packing plans,
                          solution verifier
 levels/smoke/            12 self-authored regression levels
-levels/corpus/           Microban I (155 levels, checksum + attribution)
-reference/               C++ baseline notes, pthread shim, refcheck driver
-scripts/                 corpus fetch, Gates G2/G3/G4/G5, plan/score comparators,
-                         C++ builds
+levels/corpus/           Microban I (155 levels) and XSokoban (90 levels),
+                         checksums + attribution
+reference/               C++ baseline notes, pthread/conio shims, refcheck driver
+scripts/                 corpus fetch, Gates G2–G6, plan/score/solve-set
+                         comparators, C++ builds
 ```
 
 ## Licensing

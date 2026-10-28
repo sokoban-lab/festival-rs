@@ -18,7 +18,9 @@ use festival_core::Board;
 use festival_core::io::lurd;
 use festival_core::io::sok::{load_levels, resolve_level_file};
 use festival_core::moves::{Move, MoveAttr, find_possible_moves};
+use festival_core::search::ScoreElement;
 use festival_core::search::helper::Helper;
+use festival_core::search::snail::{SnailParams, fill_netlock_scores, fill_snail_scores};
 use festival_core::{Level, LevelContext, SearchClock};
 
 fn main() -> ExitCode {
@@ -95,6 +97,15 @@ fn main() -> ExitCode {
         );
     }
 
+    if args.first().map(String::as_str) == Some("snail-state") {
+        if args.len() != 3 {
+            eprintln!("usage: festival-bench snail-state <levels.sok> <level>");
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        return snail_state(Path::new(&args[1]), level_number);
+    }
+
     if args.first().map(String::as_str) == Some("packing-plan") {
         if args.len() != 5 {
             eprintln!(
@@ -109,6 +120,90 @@ fn main() -> ExitCode {
     }
 
     analyse(args.first().map(String::as_str).unwrap_or("XSokoban"))
+}
+
+/// Mirrors `refcheck snail`: detection target, chain and netlock grid.
+fn snail_state(levels_path: &Path, level_number: usize) -> ExitCode {
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let params = &ctx.snail;
+    println!("snail {}", u8::from(params.snail_level_detected));
+    println!("netlock {}", u8::from(params.netlock_level_detected));
+    println!("target {} {}", params.target.0, params.target.1);
+    println!("chain_len {}", params.chain_len);
+    for y in 0..ctx.level.board.height() {
+        for x in 0..ctx.level.board.width() {
+            let index = Board::flat_index(y, x);
+            if params.chain[index] {
+                println!("chain {y} {x} {}", params.chain_dist[index]);
+            }
+        }
+    }
+    for y in 0..ctx.level.board.height() {
+        for x in 0..ctx.level.board.width() {
+            if params.netlock_grid[Board::flat_index(y, x)] {
+                println!("grid {y} {x}");
+            }
+        }
+    }
+
+    print_snail_scores("forward", params, &ctx.level, &ctx.level.board);
+    let mut reverse = ctx.level.board;
+    reverse.enter_reverse_mode(&ctx.level.initial, false);
+    print_snail_scores("reverse0", params, &ctx.level, &reverse);
+    let mut reverse = ctx.level.board;
+    reverse.enter_reverse_mode(&ctx.level.initial, true);
+    print_snail_scores("reverse1", params, &ctx.level, &reverse);
+    ExitCode::SUCCESS
+}
+
+/// Mirrors `refcheck snail` score rows filled by `fill_snail_scores` /
+/// `fill_netlock_scores` for every alg type.
+fn print_snail_scores(name: &str, params: &SnailParams, level: &Level, board: &Board) {
+    for alg_type in 0..4 {
+        let mut score = ScoreElement::default();
+        fill_snail_scores(params, level, board, &mut score, alg_type);
+        println!(
+            "snail-score {name} {alg_type} {} {} {} {} {}",
+            score.out_of_plan,
+            score.dist_to_imagined,
+            score.biconnect,
+            score.hotspots,
+            score.boxes_on_targets
+        );
+
+        let mut score = ScoreElement::default();
+        fill_netlock_scores(params, level, board, &mut score, alg_type);
+        println!(
+            "netlock-score {name} {alg_type} {} {} {} {}",
+            score.connectivity, score.boxes_on_targets, score.rooms_score, score.imagine
+        );
+    }
 }
 
 /// Mirrors `refcheck dragonfly`: Dragonfly exploration and frontier stats.
@@ -151,7 +246,7 @@ fn dragonfly_stats(levels_path: &Path, level_number: usize, seconds: u64) -> Exi
         }
     };
     let mut helper = Helper::default();
-    let mut perimeter = Perimeter::new(25);
+    let perimeter = Perimeter::new(25);
     let config = DragonflyConfig {
         time_limit: Some(Duration::from_secs(seconds)),
         trace: std::env::args().any(|arg| arg == "--dump"),
@@ -161,7 +256,7 @@ fn dragonfly_stats(levels_path: &Path, level_number: usize, seconds: u64) -> Exi
         &ctx,
         &mut deadlock,
         &mut helper,
-        &mut perimeter,
+        &perimeter,
         &config,
         &ctx.level.board,
     ) {
@@ -381,16 +476,17 @@ fn packing_plan(
         return ExitCode::FAILURE;
     }
     let mut helper = Helper::default();
-    let mut perimeter = Perimeter::new(log_nodes.min(22));
+    let perimeter = Perimeter::new(log_nodes.min(22));
     helper.weighted_search = true;
     let run = match run_packing(
         &ctx,
         &mut tree,
         &mut helper,
-        &mut perimeter,
+        &perimeter,
         &PackingConfig {
             time_limit: Some(Duration::from_secs(3600)),
             max_expansions: None,
+            cancel: None,
         },
         mode,
     ) {

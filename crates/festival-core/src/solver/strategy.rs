@@ -3,10 +3,9 @@
 
 //! One top-level strategy: reverse search, plan setup, forward search
 //! (`solve_with_alg` in `sokoban_solver.cpp`).
-//!
-//! Phase 4 implements strategies A/B/D/E/F/G (indices 0, 1, 3, 4, 5, 6).
-//! Strategy C (GIRL) and H (Dragonfly) arrive in Phase 5/6.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use crate::constants::SearchMode;
@@ -20,6 +19,7 @@ use crate::search::fess::{FessConfig, run_fess_into};
 use crate::search::helper::Helper;
 use crate::search::packing::{PackingConfig, run_packing};
 use crate::search::perimeter::Perimeter;
+use crate::search::snail;
 use crate::search::tree::Tree;
 use crate::solver::LevelContext;
 use crate::solver::forward::SolveOutcome;
@@ -30,6 +30,8 @@ pub struct StrategyConfig {
     pub max_expansions: Option<u64>,
     pub log_max_nodes: u32,
     pub save_best: bool,
+    /// Shared `any_core_solved` flag for multi-core scheduling.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for StrategyConfig {
@@ -39,6 +41,7 @@ impl Default for StrategyConfig {
             max_expansions: None,
             log_max_nodes: 20,
             save_best: false,
+            cancel: None,
         }
     }
 }
@@ -111,32 +114,64 @@ fn setup_plan_features(
     Ok(None)
 }
 
-/// Runs one strategy end-to-end and produces the CLI-facing outcome.
+/// Runs one strategy with private search state.
 pub fn solve_strategy(
     ctx: &LevelContext,
     strategy_index: usize,
     config: &StrategyConfig,
+) -> Result<SolveOutcome> {
+    let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
+    tree.prepare_deadlock(ctx)?;
+    let mut helper = Helper::default();
+    // Single-core C++ uses log2=25 for the shared frontier.
+    let perimeter = Perimeter::new(25);
+    solve_strategy_into(
+        ctx,
+        strategy_index,
+        config,
+        &mut tree,
+        &mut helper,
+        &perimeter,
+    )
+}
+
+/// Runs one strategy on caller-owned state; the perimeter may be shared by
+/// scheduler threads.
+pub fn solve_strategy_into(
+    ctx: &LevelContext,
+    strategy_index: usize,
+    config: &StrategyConfig,
+    tree: &mut Tree,
+    helper: &mut Helper,
+    perimeter: &Perimeter,
 ) -> Result<SolveOutcome> {
     if strategy_index >= 8 {
         return Err(SolveError::Internal(
             "algorithm number should be 0..7".into(),
         ));
     }
-    let backward = BACKWARD_SEARCH_TYPES[strategy_index];
-    let forward = FORWARD_SEARCH_TYPES[strategy_index];
+    let backward_type = BACKWARD_SEARCH_TYPES[strategy_index];
+    let forward_type = FORWARD_SEARCH_TYPES[strategy_index];
 
     let started = Instant::now();
-    let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
-    tree.prepare_deadlock(ctx)?;
-    let mut helper = Helper::default();
-    // Single-core C++ uses log2=25 for the shared frontier.
-    let mut perimeter = Perimeter::new(25);
 
     let total = secs(config.time_limit);
-    let backward_budget = Duration::from_secs(total.as_secs() / 3);
+    let mut backward_budget = Duration::from_secs(total.as_secs() / 3);
 
-    // Reverse phase.
+    // Reverse phase (`packing_search_control` remaps SNAIL/NETLOCK locally).
     helper.weighted_search = true;
+    let backward = snail::set_netlock_parameters(
+        snail::set_snail_parameters(backward_type, true, &ctx.snail, helper),
+        true,
+        &ctx.snail,
+        helper,
+    );
+    if matches!(
+        backward,
+        SearchMode::SnailSearch | SearchMode::NetlockSearch
+    ) {
+        backward_budget = Duration::from_secs(backward_budget.as_secs().saturating_mul(2));
+    }
     let mut total_expansions = 0u64;
 
     if backward == SearchMode::Dragonfly {
@@ -145,13 +180,14 @@ pub fn solve_strategy(
         let dragonfly_budget = Duration::from_secs(backward_budget.as_secs().saturating_mul(3));
         let config = DragonflyConfig {
             time_limit: Some(dragonfly_budget),
+            cancel: config.cancel.clone(),
             ..DragonflyConfig::default()
         };
         let run = run_dragonfly(
             ctx,
             &mut tree.deadlock,
-            &mut helper,
-            &mut perimeter,
+            helper,
+            perimeter,
             &config,
             &ctx.level.board,
         )?;
@@ -162,16 +198,10 @@ pub fn solve_strategy(
             time_limit,
             max_expansions,
             log_max_nodes: config.log_max_nodes,
-            save_best: false,
+            save_best: config.save_best,
+            cancel: config.cancel.clone(),
         };
-        let run = run_fess_into(
-            ctx,
-            &fess_config,
-            backward,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
-        )?;
+        let run = run_fess_into(ctx, &fess_config, backward, tree, helper, perimeter)?;
         total_expansions += run.expansions;
         if run.solved {
             return finish(
@@ -188,26 +218,26 @@ pub fn solve_strategy(
         let packing_config = PackingConfig {
             time_limit,
             max_expansions,
+            cancel: config.cancel.clone(),
         };
-        let run = run_packing(
-            ctx,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
-            &packing_config,
-            backward,
-        )?;
+        let run = run_packing(ctx, tree, helper, perimeter, &packing_config, backward)?;
         total_expansions += run.expansions;
     }
 
-    if let Some(reason) = setup_plan_features(ctx, &mut helper, backward)? {
+    if let Some(reason) = setup_plan_features(ctx, helper, backward_type)? {
         return finish_unsolved(ctx, Some(reason), total_expansions, started);
     }
 
-    // Forward phase.
+    // Forward phase (`forward_search_control` remaps SNAIL/NETLOCK locally).
+    helper.weighted_search = true;
+    let forward = snail::set_netlock_parameters(
+        snail::set_snail_parameters(forward_type, false, &ctx.snail, helper),
+        false,
+        &ctx.snail,
+        helper,
+    );
     let elapsed = started.elapsed().as_secs();
     let remaining = Duration::from_secs(total.as_secs().saturating_sub(elapsed));
-    helper.weighted_search = true;
 
     if forward == SearchMode::HfSearch {
         let first_budget = Duration::from_secs(remaining.as_secs() * 3 / 4);
@@ -219,12 +249,13 @@ pub fn solve_strategy(
                 time_limit,
                 max_expansions,
                 log_max_nodes: config.log_max_nodes,
-                save_best: false,
+                save_best: config.save_best,
+                cancel: config.cancel.clone(),
             },
             forward,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
+            tree,
+            helper,
+            perimeter,
         )?;
         total_expansions += first.expansions;
         if first.solved {
@@ -249,11 +280,12 @@ pub fn solve_strategy(
                 max_expansions,
                 log_max_nodes: config.log_max_nodes,
                 save_best: config.save_best,
+                cancel: config.cancel.clone(),
             },
             forward,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
+            tree,
+            helper,
+            perimeter,
         )?;
         total_expansions += second.expansions;
         return finish(
@@ -272,12 +304,13 @@ pub fn solve_strategy(
         let (time_limit, max_expansions) = phase_limit(config, remaining);
         let packing = run_packing(
             ctx,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
+            tree,
+            helper,
+            perimeter,
             &PackingConfig {
                 time_limit,
                 max_expansions,
+                cancel: config.cancel.clone(),
             },
             forward,
         )?;
@@ -305,11 +338,12 @@ pub fn solve_strategy(
                 max_expansions,
                 log_max_nodes: config.log_max_nodes,
                 save_best: config.save_best,
+                cancel: config.cancel.clone(),
             },
             forward,
-            &mut tree,
-            &mut helper,
-            &mut perimeter,
+            tree,
+            helper,
+            perimeter,
         )?;
         total_expansions += run.expansions;
         return finish(
@@ -330,11 +364,12 @@ pub fn solve_strategy(
             max_expansions,
             log_max_nodes: config.log_max_nodes,
             save_best: config.save_best,
+            cancel: config.cancel.clone(),
         },
         forward,
-        &mut tree,
-        &mut helper,
-        &mut perimeter,
+        tree,
+        helper,
+        perimeter,
     )?;
     total_expansions += run.expansions;
     finish(

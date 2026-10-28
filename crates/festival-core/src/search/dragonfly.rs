@@ -46,6 +46,8 @@ pub struct DragonflyConfig {
     pub max_nodes: usize,
     /// Collect every created node (diagnostic/differential use).
     pub trace: bool,
+    /// Shared `any_core_solved` flag.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for DragonflyConfig {
@@ -54,6 +56,7 @@ impl Default for DragonflyConfig {
             time_limit: None,
             max_nodes: 1 << 22,
             trace: false,
+            cancel: None,
         }
     }
 }
@@ -183,12 +186,7 @@ impl Dragonfly {
         score.dist_to_targets
     }
 
-    fn add_root(
-        &mut self,
-        ctx: &LevelContext,
-        board: &Board,
-        perimeter: &mut Perimeter,
-    ) -> Result<()> {
+    fn add_root(&mut self, ctx: &LevelContext, board: &Board, perimeter: &Perimeter) -> Result<()> {
         if self.roots.len() >= MAX_DRAGONFLY_ROOTS {
             return Err(SolveError::ResourceExhausted);
         }
@@ -342,7 +340,7 @@ impl Dragonfly {
         ctx: &LevelContext,
         deadlock: &mut DeadlockState,
         helper: &mut Helper,
-        perimeter: &mut Perimeter,
+        perimeter: &Perimeter,
         index: usize,
     ) -> Result<bool> {
         let e = self.nodes[index];
@@ -453,7 +451,7 @@ pub fn run_dragonfly(
     ctx: &LevelContext,
     deadlock: &mut DeadlockState,
     helper: &mut Helper,
-    perimeter: &mut Perimeter,
+    perimeter: &Perimeter,
     config: &DragonflyConfig,
     board_in: &Board,
 ) -> Result<DragonflyRun> {
@@ -489,6 +487,9 @@ pub fn run_dragonfly(
             if started.elapsed().as_secs() > limit.as_secs() {
                 break;
             }
+        }
+        if crate::search::cancelled(&config.cancel) {
+            break;
         }
 
         let Some(node_index) = dragonfly.queue.extract_max(&dragonfly.nodes) else {
@@ -589,7 +590,7 @@ mod tests {
         let mut tree = crate::search::tree::Tree::new_with_level(12, &ctx.level).unwrap();
         tree.prepare_deadlock(&ctx).unwrap();
         let mut helper = Helper::default();
-        let mut perimeter = Perimeter::new(12);
+        let perimeter = Perimeter::new(12);
         let config = DragonflyConfig {
             time_limit: Some(Duration::from_secs(5)),
             max_nodes: 100_000,
@@ -599,7 +600,7 @@ mod tests {
             &ctx,
             &mut deadlock,
             &mut helper,
-            &mut perimeter,
+            &perimeter,
             &config,
             &ctx.level.board,
         )

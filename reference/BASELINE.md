@@ -347,11 +347,142 @@ e84f5d8297cb92bd17df60a260687bbd26f1e4ef54ac015016c714175757d895 *target/g5/micr
 e6c396962d00dfacffca7c3b9ba213063334c1dd5c93728c4921ccc9b8610d75 *target/g5-run.log
 ```
 
+## Gate G6 differential (2026-10-28)
+
+Commands (repository root, same machine as G2–G5):
+
+```sh
+G6_SKIP_BUILD=1 scripts/run_g6.sh
+cargo +nightly miri test -p festival-core --lib \
+    perimeter::tests::concurrent_access_is_synchronized
+```
+
+The Miri subset is the command `run_g6.sh` runs with `G6_MIRI=1`; it was
+rerun separately after the score-payload fix. The script verifies both corpus
+checksums, compares SNAIL/NETLOCK detection
+state and score payloads with `refcheck snail`, runs every strategy alone on Microban 1–20, runs
+the 1/2/4/8-core schedule on Microban 1–40, and runs the full Microban corpus
+plus XSokoban 1–20 with the default schedule. All solver runs are sequential;
+running the two solvers concurrently perturbs the wall-clock budget and was
+observed to flip a timing-boundary level.
+
+### SNAIL / NETLOCK detection and score payloads
+
+`refcheck snail` prints `snail_level_detected`, `netlock_level_detected`, the
+chosen target, chain length/distances and the netlock grid after
+`preprocess_level`. It also prints, for every alg type 0–3, the fields filled by
+`fill_snail_scores` / `fill_netlock_scores` on the preprocessed initial board
+and on both reverse-mode variants (`mark_bases` 0/1).
+`festival-bench snail-state` prints the same rows from `SnailParams` and the
+Rust scoring functions. Compared on all 155 Microban levels, XSokoban 1–20, and
+the three self-authored chain levels in `levels/smoke/snail.sok`:
+
+| Metric | Value |
+|---|---|
+| Levels compared | 178 |
+| Detection/state mismatches | 0 |
+| Score rows compared | 4,272 (24 per level) |
+| Score mismatches | 0 |
+
+The reverse boards place a box on every target, so the rows exercise both
+values of `out_of_plan` (0 forward, 1 reverse). Review after the first Gate run
+found the Rust `out_of_plan` test inverted relative to C++'s "box on the
+target" check; it was fixed and the Gate was fully rerun. `snail_packed`
+matches C++'s loop counter, which returns 1 for an empty chain (only
+non-detected levels, where the payload is unused).
+
+The synthetic set covers pull-order depth 20 (SNAIL), 10 (NETLOCK) and 9
+(control). Depth 20 also exercises C++'s signed `snail_dist` value of `-1`
+when the detected target is not the chain's far end; the port keeps the signed
+value and skips out-of-range `snail_packed` slots where C++ indexes out of
+bounds.
+
+Neither corpus nor the synthetic set provides a solvable SNAIL/NETLOCK puzzle
+(the fixtures have more targets than boxes), so this Gate compares detection
+and score payloads but does not run an end-to-end SNAIL/NETLOCK search. A
+solvable chain fixture is a Phase 7 differential item.
+
+### Eight strategies, one core (`-time 30`, Microban 1–20)
+
+| Strategy | C++ solved | Rust solved | Solve-set diffs | C++ moves/pushes | Rust moves/pushes | Invalid |
+|---|---|---|---|---|---|---|
+| 0 A | 20/20 | 20/20 | 0 | 1157 / 322 | 1163 / 322 | 0 |
+| 1 B | 20/20 | 20/20 | 0 | 1193 / 326 | 1193 / 326 | 0 |
+| 2 C | 18/20 | 18/20 | 0 | 1043 / 276 | 1043 / 276 | 0 |
+| 3 D | 20/20 | 20/20 | 0 | 1167 / 322 | 1167 / 322 | 0 |
+| 4 E | 20/20 | 20/20 | 0 | 1147 / 318 | 1147 / 318 | 0 |
+| 5 F | 20/20 | 20/20 | 0 | 1179 / 324 | 1179 / 324 | 0 |
+| 6 G | 20/20 | 20/20 | 0 | 1221 / 330 | 1227 / 330 | 0 |
+| 7 H | 20/20 | 20/20 | 0 | 1210 / 322 | 1250 / 330 | 0 |
+
+### 1/2/4/8-core schedule (`-time 30`, Microban 1–40, no `-alg`)
+
+| Cores | C++ solved | Rust solved | Solve-set diffs | C++ moves/pushes | Rust moves/pushes | Invalid |
+|---|---|---|---|---|---|---|
+| 1 | 40/40 | 40/40 | 0 | 2383 / 650 | 2375 / 654 | 0 |
+| 2 | 40/40 | 40/40 | 0 | 2399 / 644 | 2381 / 638 | 0 |
+| 4 | 40/40 | 40/40 | 0 | 2375 / 638 | 2393 / 644 | 0 |
+| 8 | 40/40 | 40/40 | 0 | 2391 / 668 | 2396 / 670 | 0 |
+
+Runs are not CPU-pinned, so solution quality varies between runs; the solve
+sets were identical on every run.
+
+### Corpus (`-time 120`, one core, default schedule)
+
+| Set | C++ solved | Rust solved | Solve-set diffs | Invalid |
+|---|---|---|---|---|
+| Microban 1–155 | 155/155 | 155/155 | 0 | 0 |
+| XSokoban 1–20 | 20/20 | 20/20 | 0 | 0 |
+
+At 30 s, Microban 153 sat exactly on the time-limit boundary and flipped
+between runs. At 60 s, XSokoban 14/16 were boundary levels for Rust while C++
+solved them; XSokoban 29 is the reverse at 120 s (Rust 37 s, C++ >120 s). The
+Gate corpus budget is therefore 120 s and the XSokoban subset is 1–20. The
+remaining boundary behavior is a Phase 7 performance target, not a solve-set
+semantic difference: every Rust solution in these runs replays independently.
+
+### Concurrency
+
+- Rust `festival-core` is `#![forbid(unsafe_code)]`; the only shared mutable
+  state is the perimeter `Mutex` and the `any_core_solved` atomic. Trees,
+  helpers and deadlock state are owned by one worker.
+- ThreadSanitizer is not supported for `x86_64-pc-windows-msvc` on this
+  toolchain (`error: thread sanitizer is not supported for this target`), so
+  the Gate uses a Miri subset: four threads perform 2,000 concurrent perimeter
+  stores/lookups and poll the cancellation atomic. `cargo +nightly miri test`
+  passes with no data-race report (53 s).
+- 1/2/4/8-core runs over 40 levels (plus the smoke and corpus sets) completed
+  without panic or deadlock.
+- The C++ reference build gains a headless `conio.h` shim: upstream
+  `engine.cpp` pauses on a multi-core "should not be pruned!" diagnostic,
+  which blocks non-interactive runs. The shim only makes that diagnostic
+  pause return immediately.
+- C++ needs `-time >= 24 -cores 1`: budgets are integer-divided by three per
+  strategy, and a zero-length backward phase leaves `imagined_hf_board` unset
+  and aborts with "box num mismatch2". The Rust port instead degrades that
+  score to `INF`; Gate runs stay above the upstream minimum.
+- Deadlock cache, learned stuck patterns, k-distance and Hungarian caches are
+  per worker (C++ keeps them in process globals). Deadlock verdicts are
+  unaffected (Gate G3 cache-on/off invariance); learning and timing can shift
+  individual searches.
+- `-alg` is honored for every core count; C++ 3.1 ignores it when
+  `-cores > 1`. Default `-cores` rounds the available processors to 1/2/4/8;
+  C++ also applies RAM thresholds.
+
+Recorded checksums (logs embed timings, so these identify the run):
+
+```text
+b4d61d0fea2420ccc22a910f1b2b61bafbcf9bc18ee5086d8531e99b451f239f *target/g6/summary.txt
+a6d6a02986bb616ad85122203bbec20af549fdb71cd9cbf93bbfe2f8184bf251 *target/g6-run.log
+ec62efc47b8b94054cf9044ffde0b376c06f5a224b09f4c358eeb1f12e0879d1 *target/g6/miri.log
+```
+
 ## Still missing
 
-Phase 6 items: the 8-strategy multi-core scheduler, shared deadlock/perimeter
-state across threads, `SNAIL_SEARCH` / `NETLOCK_SEARCH`, and per-node search
-trace comparison (`refcheck trace`). The current differential covers
-per-board/per-move deadlock verdicts, packing plans, end-to-end solve results
-for all eight strategies, GIRL score/value numerics, Dragonfly exploration
-stats and independent solution replay.
+Phase 7: performance parity and stability. The differential still lacks
+per-node search trace comparison (`refcheck trace`), a solvable SNAIL/NETLOCK
+fixture for an end-to-end search comparison, and a ThreadSanitizer or loom run
+of the full scheduler (TSan is unavailable on this target; the Miri subset
+covers the shared perimeter/cancellation state). Performance gaps remain on
+XSokoban 14/16/29 at short budgets, and the 8-worker tree memory footprint has
+not yet been budgeted (Phase 7).
