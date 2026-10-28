@@ -18,7 +18,7 @@ before the next one starts.
 | Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
 | Phase 5 | complete (GIRL/Dragonfly, Gate G5) | GIRL value function and ε-greedy tree descent, Dragonfly priority-queue pull search, NAIVE forward scoring, strategies C/H, GIRL score/value differential |
 | Phase 6 | complete (scheduler/multicore, Gate G6) | SNAIL/NETLOCK detection and scoring, 8-strategy schedule, 1/2/4/8-core workers with shared perimeter and atomic cancellation, `-save_best`, XSokoban corpus, snail-state differential |
-| Phase 7 | not started | performance, memory and stability |
+| Phase 7 | complete (performance/memory/stability, Gate G7; 24 h soak pending) | scratch/graph reuse, C++-equivalent phase clock, stack BFS buffers, per-worker 22-bit deadlock cache, `try_reserve` failure path, parser/LURD/move fuzzing, RSS soak harness |
 
 The CLI runs the same reverse-packing → plan → forward-FESS structure as C++.
 Without `-alg` it runs the eight-strategy schedule over 1/2/4/8 workers, like
@@ -29,7 +29,9 @@ C++ and identical total moves/pushes; strategy H (Dragonfly + NAIVE) solves
 80/80 with a 0.3% quality difference (Gate G5). With `-cores 1` the schedule
 solves the same Microban 155 and XSokoban 1–20 sets as C++ (Gate G6), and
 1/2/4/8-core runs match C++ on Microban 1–40. Every Rust solution replays
-independently.
+independently. Pinned single-core runtime is 0.82× (Microban 1–155) and 1.07×
+(XSokoban 1–20) of C++ at the same budget, 8-core throughput is 1.76× C++,
+and peak RSS is 0.18× (Gate G7; the 24-hour soak is still pending).
 
 `-cores` accepts 1/2/4/8 and defaults to the host processor count capped at 8.
 Each worker owns its tree, helper and deadlock state; the perimeter and the
@@ -117,6 +119,19 @@ aborts on a zero-length HF phase on one core. The corpus step uses
 `G6_CORPUS_TIME=120`, because XSokoban 14/16 and Microban 153 sit on the
 time-limit boundary at 30–60 s.
 
+Reproduce Gate G7 (toolchain gates, single-core runtime, 8-core throughput,
+peak RSS, Miri, fuzzing, and a soak run with RSS sampling):
+
+```sh
+G7_PIN_CPU=1 G7_FUZZ_SECONDS=60 G7_SOAK_SECONDS=600 scripts/run_g7.sh
+```
+
+`G7_PIN_CPU=1` pins the single-core timing runs to one P-core; on this hybrid
+CPU unpinned runs move between P- and E-cores and the ratio changes by up to
+2x. The Gate criterion is a 24-hour soak: set `G7_SOAK_SECONDS=86400` for the
+full run. `scripts/fuzz_env.sh` points `cargo fuzz` at LLVM's ASan runtime
+because this Visual Studio install has no x64 AddressSanitizer component.
+
 Baseline commands, recorded results and per-level quality differences are in
 [`reference/BASELINE.md`](reference/BASELINE.md).
 
@@ -159,13 +174,15 @@ crates/festival-core/    pure algorithms, #![forbid(unsafe_code)]
   src/io/solution.rs     player-path BFS, LURD and result files
 crates/festival-cli/     festival-rs binary
 crates/festival-bench/   static analysis CSV, deadlock differential, packing plans,
-                         solution verifier
+                         solution verifier, soak driver
+fuzz/                    cargo-fuzz targets for the parser, LURD replay and
+                         move generation
 levels/smoke/            12 self-authored regression levels
 levels/corpus/           Microban I (155 levels) and XSokoban (90 levels),
                          checksums + attribution
 reference/               C++ baseline notes, pthread/conio shims, refcheck driver
-scripts/                 corpus fetch, Gates G2–G6, plan/score/solve-set
-                         comparators, C++ builds
+scripts/                 corpus fetch, Gates G2–G7, plan/score/solve-set
+                         comparators, C++ builds, fuzz/ASan environment
 ```
 
 ## Licensing

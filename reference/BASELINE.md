@@ -477,12 +477,135 @@ a6d6a02986bb616ad85122203bbec20af549fdb71cd9cbf93bbfe2f8184bf251 *target/g6-run.
 ec62efc47b8b94054cf9044ffde0b376c06f5a224b09f4c358eeb1f12e0879d1 *target/g6/miri.log
 ```
 
+## Gate G7 performance, memory and stability (2026-10-28)
+
+Commands (repository root, same host as G2–G6):
+
+```sh
+G7_PIN_CPU=1 G7_REPEATS=3 G7_FUZZ_SECONDS=60 G7_SOAK_SECONDS=600 \
+    scripts/run_g7.sh
+```
+
+`G7_PIN_CPU=1` pins the single-core timing runs to CPU 0, a P-core on the
+i9-14900HX (8 P + 16 E cores, 32 threads). Unpinned, the same binaries move
+between core types between runs: the C++ Microban 1–155 wall clock ranged from
+18.8 s to 44.8 s across unpinned runs, which is enough to flip the acceptance
+ratio. All numbers below are pinned best-of-3. The script also runs the
+toolchain gates, Miri, fuzzing and the soak; the 24-hour soak run is
+`G7_SOAK_SECONDS=86400` (not executed, see “Still missing”).
+
+### Single-core total runtime (`-time 60 -cores 1`, best of 3)
+
+| Set | C++ | Rust | Rust / C++ | Solved | Moves/pushes (C++ → Rust) |
+|---|---|---|---|---|---|
+| Microban 1–155 | 23,576 ms | 19,415 ms | 0.824 | 155/155 → 155/155 | 22,460/5,912 → 22,486/5,920 |
+| XSokoban 1–20 | 14,969 ms | 15,972 ms | 1.067 | 20/20 → 20/20 | 18,143/5,466 → 18,143/5,466 |
+
+Both sets are within the ≤1.25 requirement and the ≤1.10 target. Solution
+quality differs by at most 0.12% (Microban) and is identical on XSokoban.
+
+The recorded C++ Microban total is slower than the unpinned best (18.8 s)
+because CPU 0 ran at a lower sustained clock during this run; the ratio is the
+acceptance metric, and individual repetition pairs ranged from 0.82 to 1.00.
+
+### 8-core throughput (`-time 60 -cores 8`, Microban 1–155, best of 3)
+
+| Solver | Wall clock | Solved | Rust / C++ |
+|---|---|---|---|
+| C++ | 121,909 ms | 155/155 | — |
+| Rust | 69,204 ms | 155/155 | 0.568 |
+
+Rust throughput is 1.76× C++, above the “≥ 80% of C++” requirement (ratio
+≤ 1.25). C++ sizes its one process-wide deadlock cache by core count
+(22/23/24/25 bits for 1/2/4/8 cores); Rust gives every worker a 22-bit cache,
+which matches the 8-worker footprint and bounds memory.
+
+### Peak working set (XSokoban 16)
+
+| Cores | C++ | Rust | Rust / C++ |
+|---|---|---|---|
+| 1 (`-time 30`) | 720.2 MB | 127.3 MB | 0.177 |
+| 8 (`-time 5`) | 5,614.7 MB | 980.1 MB | 0.175 |
+
+### Stability
+
+- **Soak** (`festival-bench soak` over Microban, 8 workers, 600 s, 3,000
+  expansions per level): 1,659 iterations, 1,659 solved, 0 failures, exit 0.
+  External RSS sampling every 500 ms gives a steady-state mean of 351.0 →
+  345.0 MB (drift 0.983) and a half-over-half peak of 603.9 → 614.2 MB
+  (drift 1.017). The working set is a sawtooth as each level allocates and
+  frees its tree; the script compares the second and last quintiles rather
+  than raw minima. The 24-hour Gate run was not executed.
+- **Miri** shared-state subset (perimeter mutex + cancellation atomic, four
+  threads, 2,000 stores/lookups): passes with no data-race report (53 s).
+- **Fuzzing** (`cargo +nightly fuzz`, 60 s per target, ASan runtime):
+  parser 179,628 runs, LURD replay 286,687 runs, move generation 433 runs, no
+  crash. The move target re-runs level preprocessing and deadlock preparation
+  for every input, hence the low rate.
+- **Toolchain**: `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo test --workspace` (115 unit tests plus
+  integration suites) and `cargo deny check` all pass.
+
+### Engine changes found by the Gate
+
+- `is_corral_active` checked the box ring only on corral cells. C++ checks the
+  whole board, so restoring that condition made move generation identical on
+  2,001 deep boards and made every strategy’s Microban 1–20 move/push totals
+  exactly match C++ (Gate G6 rerun).
+- `score_parked_boxes` treated every initial box as mandatory. Only boxes with
+  `until == -1` are mandatory; the old rule made strategy A time out on
+  XSokoban 14.
+- The scheduler clock now matches C++: C++ starts `start_time` after
+  preprocessing and tree set-up, measures whole seconds with `time(0)`, and
+  stops only when `elapsed_seconds > budget`. Rust previously charged worker
+  preparation to the first phase and used a precise clock, so Microban 153
+  strategy A (C++ 3 s) timed out and the level took 31 s; whole-corpus runtime
+  was 62 s. Starting the clock after worker preparation and adding the C++
+  one-second slack brings level 153 to 3 s and the corpus to 19.4 s.
+- `find_possible_moves` reuses helper-owned move/graph scratch and wallifies
+  fixed boxes once per deadlock check; BFS and room analysis use stack `u16`
+  buffers swapped as slices instead of allocating per wave.
+- Tree arenas use `try_reserve_exact` and report `ResourceExhausted` instead of
+  aborting on allocation failure; a unit test covers the failure path.
+
+### Regression after the changes
+
+- Gate G3: 238,928 sampled boards per pass, 0 board/move mismatches, 0
+  cache-on/off verdict differences, 12/12 smoke levels, 40/40 Microban
+  solutions replay.
+- Gate G6: eight strategies solve Microban 1–20 with identical move/push
+  totals; the 1/2/4/8-core schedule has 0 solve-set differences on Microban
+  1–40; corpus runs solve 155/155 Microban and 20/20 XSokoban with 0 invalid
+  solutions.
+
+Recorded checksums:
+
+```text
+dd4d40241b457c07b52a7d2804b849f0142b8958d0058301166e91059d2743fe *target/g7/summary.txt
+2a51935f43309da5c4475fdb04fc1db797d9588f58e216a93b82b22e721bd3e1 *target/g7-run-final.log
+6a7c40dc0eaa17b45f29081d8259cfcbcb1b72e3fe8c65f71f17c4201a7c87bf *target/g7/miri.log
+d5e9f16b103769c6b91252da6167a4d718664045640c3da8ef411744b780d36f *target/g7/fuzz-parser.log
+fd9e36c92bb1fa09d5a2937cd99013e7c4c85b0a7cda2124001d57548a7f27e3 *target/g7/fuzz-lurd.log
+16eec2706f4a85b3f8b59718938ee885b4f8ba7490c0a1a10cf0c02b72f07299 *target/g7/fuzz-moves.log
+```
+
 ## Still missing
 
-Phase 7: performance parity and stability. The differential still lacks
-per-node search trace comparison (`refcheck trace`), a solvable SNAIL/NETLOCK
-fixture for an end-to-end search comparison, and a ThreadSanitizer or loom run
-of the full scheduler (TSan is unavailable on this target; the Miri subset
-covers the shared perimeter/cancellation state). Performance gaps remain on
-XSokoban 14/16/29 at short budgets, and the 8-worker tree memory footprint has
-not yet been budgeted (Phase 7).
+- The 24-hour soak acceptance run has not been executed; the recorded soak is
+  600 s. Run `G7_PIN_CPU=1 G7_SOAK_SECONDS=86400 scripts/run_g7.sh` and append
+  its summary and checksums here.
+- Per-node search trace comparison (`refcheck trace`) is still absent; the
+  differential covers scoring, deadlock verdicts, move generation, parking
+  plans and solve sets, not expansion order.
+- No solvable SNAIL/NETLOCK fixture exists, so those modes are compared by
+  detection state and score payloads only.
+- ThreadSanitizer is unavailable for `x86_64-pc-windows-msvc`; the Miri subset
+  covers the shared perimeter and cancellation state but not the full
+  scheduler.
+- This Visual Studio installation has no x64 AddressSanitizer component
+  (`VCASAN.lib`, `stl_asan.lib`). `scripts/fuzz_env.sh` points the linker at
+  LLVM's ASan runtime and supplies marker-only MSVC stubs; fuzzing is limited
+  to 60-second sessions. Installing the ASan component or running the targets
+  under Linux would remove the workaround.
+- Single-core timings require CPU pinning on this hybrid host; unpinned runs
+  are not comparable.

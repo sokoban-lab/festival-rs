@@ -8,7 +8,7 @@
 | 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
 | 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
 | 目标版本 | `festival-rs 1.0`：行为等价移植 |
-| 当前进展 | Phase 0/1/2/3/4/5 完成；策略 A/B/D/E/F/G 在 Microban 1–80 上解题集一致（Gate G4），策略 C 与 C++ 解题集及总步数/推数完全一致、策略 H 解题集一致（Gate G5），GIRL score/value 在 92,903 个样本上零差异（2026-10-27） |
+| 当前进展 | Phase 0–7 完成；Phase 6 达到 8 策略与 1/2/4/8 核完整调度；Gate G7：单核 Microban 0.82×、XSokoban 1.07× C++，8 核吞吐 1.76× C++，峰值 RSS 0.18×，600 s soak 无泄漏（24 h soak 未执行）（2026-10-28） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
 
@@ -1385,3 +1385,42 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 - `--max-expansions` 对 Dragonfly 无对应语义（C++ 只有时间预算）；策略 H 的反向阶段始终使用时间预算。
 - `refcheck dragonfly` 显示少量关卡的 Dragonfly 前沿规模与 C++ 不同（例如第 13 关 107 vs 109 个节点），因此策略 H 的解质量存在少量关卡级差异；解题集不受影响。
 - 逐节点搜索 trace（扩展顺序/label/move）仍未实现，GIRL 差分覆盖固定输入下的评分与数值，不覆盖完整搜索轨迹；该 trace 对比留待 Phase 6。
+
+
+---
+
+## 19. Phase 6/7 实施进展（2026-10-28）
+
+**Phase 6（Gate G6）**
+
+- `solver/scheduler.rs`：1/2/4/8 核策略调度、每 worker 独立 tree/helper/deadlock 状态、共享 perimeter 与取消原子；`-alg` 在所有核数下生效。
+- `search/snail.rs`：SNAIL/NETLOCK 检测、链目标、`fill_snail_scores` / `fill_netlock_scores`；178 关检测状态与 4,272 行评分载荷与 C++ 零差异。
+- 8 策略单核 Microban 1–20 解题集一致；1/2/4/8 核 Microban 1–40 零差异；Microban 155/155、XSokoban 20/20。
+- `festival-bench snail-state`、`scripts/run_g6.sh`、`scripts/compare_solved_sets.py`。
+
+**Phase 7（Gate G7）**
+
+- 基准与工具：`scripts/run_g7.sh`（固定 CPU、重复计时、RSS 采样、soak、fuzz、Miri、fmt/clippy/test/deny）、`scripts/process_rss.ps1`、`festival-bench soak`、`fuzz/`（parser/LURD/move 三个 cargo-fuzz 目标）、`deny.toml`。
+- 性能：per-helper move/graph scratch、每次死锁检查复用 wallification、`Graph::unbuilt`、BFS/rooms 栈上 `u16` 双缓冲、每 worker 22 位死锁缓存、`try_reserve_exact` 失败路径。
+- 调度时钟对齐 C++：`start_time` 在 worker 准备之后；整秒 `time(0)` 的 `elapsed > budget` 语义折算为“预算 N 秒实际可用 N+1 秒”，预算为 0 时仍跳过。修复前 Microban 153 的策略 A 超时（31 s），修复后 3 s，单核全语料 62 s → 19.4 s。
+- 语义修正（由性能排查发现）：`is_corral_active` 恢复 C++ 的全盘箱环检查；`score_parked_boxes` 只把 `until == -1` 的初始箱视为强制。
+- Gate 结果（`G7_PIN_CPU=1 G7_REPEATS=3 G7_FUZZ_SECONDS=60 G7_SOAK_SECONDS=600 scripts/run_g7.sh`）：
+
+| 指标 | C++ | Rust | 比值 | 门槛 |
+|---|---|---|---|---|
+| 单核 Microban 1–155（60 s） | 23.576 s | 19.415 s | 0.824 | ≤1.25（目标 ≤1.10） |
+| 单核 XSokoban 1–20（60 s） | 14.969 s | 15.972 s | 1.067 | ≤1.25（目标 ≤1.10） |
+| 8 核 Microban 1–155（60 s） | 121.909 s | 69.204 s | 0.568 | ≤1.25（吞吐 ≥80%） |
+| 峰值 RSS，1 核 XSokoban 16 | 720.2 MB | 127.3 MB | 0.177 | ≤1.20 |
+| 峰值 RSS，8 核 XSokoban 16 | 5,614.7 MB | 980.1 MB | 0.175 | ≤1.20 |
+| 600 s soak | — | 1,659 次求解，0 失败 | 均值漂移 0.983 / 峰值漂移 1.017 | ≤1.20 |
+
+- 稳定性：Miri 共享状态子集通过；fuzz 60 s/目标（parser 179,628 次、LURD 286,687 次、move 433 次）无崩溃；`cargo fmt --check`、`clippy -D warnings`、115 个单元测试、`cargo deny check` 全绿。
+- 回归：G3 238,928 盘面/轮 0 差异；G6 八策略步数/推数与 C++ 完全一致，1/2/4/8 核零差异，语料 155/155 + 20/20。
+
+**Phase 7 有意保留的差异/未完成**
+
+- 24 小时 soak 未执行；已记录 600 s soak，完整命令为 `G7_PIN_CPU=1 G7_SOAK_SECONDS=86400 scripts/run_g7.sh`。
+- 本机 Visual Studio 缺少 x64 ASan 组件，`scripts/fuzz_env.sh` 使用 LLVM ASan 运行时并补两个仅含标记符号的 MSVC 库；fuzz 仅做 60 s 会话。
+- 混合核机器必须固定 CPU；未固定时同一二进制的整语料墙钟可在 18.8–44.8 s 间变化。
+- 逐节点 trace 差分、可解 SNAIL/NETLOCK 样例、ThreadSanitizer 全调度器运行仍未覆盖（TSan 在该 target 不可用）。
