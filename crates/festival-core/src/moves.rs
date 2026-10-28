@@ -188,10 +188,10 @@ pub fn find_possible_moves(
     if scratch.len() < MAX_MOVES {
         scratch.resize(MAX_MOVES, Move::default());
     }
-    let mut graph = helper
-        .graph_scratch
-        .take()
-        .unwrap_or_else(|| Graph::new(level));
+    let mut graph = match helper.graph_scratch.take() {
+        Some(graph) if graph.matches_level(level) => graph,
+        _ => Graph::new(level),
+    };
     let mut moves: Vec<Move> = Vec::new();
 
     let result = (|| -> Result<(Vec<Move>, bool)> {

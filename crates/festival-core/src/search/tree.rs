@@ -149,6 +149,52 @@ impl Tree {
         Ok(())
     }
 
+    /// Prepares a used tree for another level while keeping its arenas.
+    ///
+    /// Returns `false` when the tree was built for a different capacity, in
+    /// which case the caller must create a fresh one. The hash table is left
+    /// stale: every search phase calls `Tree::reset`, which refills it before
+    /// the first lookup. The board arena keeps its bytes; each expansion
+    /// writes its own board before anything reads it.
+    pub fn prepare_for_level(&mut self, log_max_nodes: u32, ctx: &LevelContext) -> Result<bool> {
+        if !(4..=30).contains(&log_max_nodes) || self.max_nodes != 1usize << log_max_nodes {
+            return Ok(false);
+        }
+        let width = ctx.level.initial.width();
+        let height = ctx.level.initial.height();
+        if width == 0 || height == 0 {
+            return Err(SolveError::Internal("bad tree geometry".into()));
+        }
+        let board_stride = width * height;
+        let boards_len = self
+            .max_expansions
+            .checked_mul(board_stride)
+            .ok_or(SolveError::ResourceExhausted)?;
+        if boards_len > self.boards.len() {
+            self.boards
+                .try_reserve_exact(boards_len - self.boards.len())
+                .map_err(|_| SolveError::ResourceExhausted)?;
+            self.boards.resize(boards_len, 0);
+        } else {
+            self.boards.truncate(boards_len);
+        }
+
+        self.width = width;
+        self.height = height;
+        self.board_stride = board_stride;
+        self.nodes.clear();
+        self.expansions.clear();
+        self.move_hashes.clear();
+        for queue in &mut self.queues {
+            queue.clear();
+        }
+        self.labels_num = 0;
+        self.pull_mode = false;
+        self.search_mode = SearchMode::Normal;
+        self.deadlock.reprepare(ctx)?;
+        Ok(true)
+    }
+
     pub fn reset(&mut self) {
         self.hash_array.fill(NONE_NODE);
         self.nodes.clear();

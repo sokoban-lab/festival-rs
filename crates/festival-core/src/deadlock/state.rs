@@ -17,6 +17,10 @@ use crate::deadlock::rooms::init_rooms_deadlock;
 use crate::deadlock::stuck::StuckPatterns;
 use crate::solver::LevelContext;
 
+/// C++ sizes the process-wide cache by core count; each Rust worker owns the
+/// 1-core size, so eight workers match the C++ eight-core footprint.
+const CACHE_LOG_SIZE: u32 = 22;
+
 pub struct RoomsDeadlockData {
     pub room_with_corridors: Vec<Board>,
     pub room_size: Vec<usize>,
@@ -146,14 +150,26 @@ impl DeadlockState {
 
     /// Per-level initialization in `preprocess_level` order.
     pub fn prepare(ctx: &LevelContext) -> crate::error::Result<Self> {
-        // C++ sizes the process-wide cache by core count (22/23/24/25); each
-        // Rust worker owns a 22-bit cache, so the total footprint matches.
-        let mut state = Self::new(22);
-        state.rooms = init_rooms_deadlock(ctx);
-        crate::deadlock::mpdb::build_mpdb2(ctx, &mut state)?;
-        crate::deadlock::mpdb::build_pull_mpdb2(ctx, &mut state)?;
-        crate::analysis::envelope::init_envelope_patterns(ctx, &mut state)?;
+        let mut state = Self::new(CACHE_LOG_SIZE);
+        state.reprepare(ctx)?;
         Ok(state)
+    }
+
+    /// Rebuilds a state that still holds a previous level's data. The cache
+    /// allocation is kept; `DeadlockCache::clear` only bumps its generation.
+    pub fn reprepare(&mut self, ctx: &LevelContext) -> crate::error::Result<()> {
+        self.clear();
+        if self.cache.log_size() != CACHE_LOG_SIZE {
+            self.cache = DeadlockCache::new(CACHE_LOG_SIZE);
+        }
+        self.learn_mini_corral = false;
+        self.cache_enabled = true;
+        self.suppress_cache_writes = false;
+        self.rooms = init_rooms_deadlock(ctx);
+        crate::deadlock::mpdb::build_mpdb2(ctx, self)?;
+        crate::deadlock::mpdb::build_pull_mpdb2(ctx, self)?;
+        crate::analysis::envelope::init_envelope_patterns(ctx, self)?;
+        Ok(())
     }
 
     pub fn clear(&mut self) {

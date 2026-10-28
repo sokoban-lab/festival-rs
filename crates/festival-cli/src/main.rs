@@ -17,7 +17,7 @@ use festival_core::io::solution::{
 };
 use festival_core::search::FessConfig;
 use festival_core::solver::{
-    CORE_COUNTS, SchedulerConfig, SolveOutcome, default_cores, solve_forward, solve_level,
+    CORE_COUNTS, SchedulerConfig, SolveOutcome, Solver, default_cores, solve_forward,
     strategy_supported,
 };
 use festival_core::{Level, LevelContext, SearchClock};
@@ -225,6 +225,8 @@ fn run_solver(
     }
 
     let log_max_nodes = tree_log_size(args);
+    // One worker set for the whole run, like C++ `search_trees[]`.
+    let mut solver = Solver::new();
     let mut record = 0usize;
     let mut total_levels = 0usize;
     let mut solved_levels = 0usize;
@@ -340,7 +342,7 @@ fn run_solver(
                 log_max_nodes,
                 save_best: args.save_best,
             };
-            match solve_level(&ctx, &config) {
+            match solver.solve_level(&ctx, &config) {
                 Ok(run) => {
                     let solutions: Vec<SolveOutcome> =
                         run.solutions(args.save_best).into_iter().cloned().collect();

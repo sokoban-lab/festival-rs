@@ -488,7 +488,7 @@ fn fwb_run(
 /// Repeats preprocessing + solving in one process; the G7 soak driver polls
 /// this process's RSS to detect leaks.
 fn soak(levels_path: &Path, seconds: u64, max_expansions: u64, cores: usize) -> ExitCode {
-    use festival_core::solver::scheduler::{SchedulerConfig, solve_level};
+    use festival_core::solver::scheduler::{SchedulerConfig, Solver};
 
     let raws = match load_levels(levels_path) {
         Ok(raws) => raws,
@@ -503,6 +503,7 @@ fn soak(levels_path: &Path, seconds: u64, max_expansions: u64, cores: usize) -> 
     }
 
     let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut solver = Solver::new();
     let mut iterations = 0u64;
     let mut solved = 0u64;
     let mut failures = 0u64;
@@ -533,7 +534,7 @@ fn soak(levels_path: &Path, seconds: u64, max_expansions: u64, cores: usize) -> 
                 log_max_nodes: 16,
                 save_best: false,
             };
-            match solve_level(&ctx, &config) {
+            match solver.solve_level(&ctx, &config) {
                 Ok(run) => {
                     if run.solved {
                         solved += 1;

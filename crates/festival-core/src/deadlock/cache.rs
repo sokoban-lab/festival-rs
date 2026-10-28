@@ -13,6 +13,9 @@ const SEARCH_EXCEEDED: i8 = 2;
 struct CacheEntry {
     hash: u64,
     queries: u32,
+    /// Bumped on `clear`; entries from an older generation read as empty, so a
+    /// per-level reset never touches the 4M-entry table.
+    generation: u32,
     result: i8,
     pull_mode: i8,
     alg: i8,
@@ -23,33 +26,27 @@ pub struct DeadlockCache {
     mask: u64,
     total: usize,
     log_size: u32,
+    generation: u32,
 }
 
 impl DeadlockCache {
     pub fn new(log_size: u32) -> Self {
         let log_size = log_size.clamp(10, 26);
         let size = 1usize << log_size;
-        let mut entries = vec![CacheEntry::default(); size];
-        for entry in &mut entries {
-            entry.result = -1;
-            entry.pull_mode = -1;
-            entry.alg = -1;
-        }
         Self {
-            entries,
+            entries: vec![CacheEntry::default(); size],
             mask: (size - 1) as u64,
             total: 0,
             log_size,
+            generation: 1,
         }
     }
 
     pub fn clear(&mut self) {
-        for entry in &mut self.entries {
-            entry.hash = 0;
-            entry.result = -1;
-            entry.pull_mode = -1;
-            entry.alg = -1;
-            entry.queries = 0;
+        self.generation = self.generation.wrapping_add(1);
+        if self.generation == 0 {
+            self.entries.fill(CacheEntry::default());
+            self.generation = 1;
         }
         self.total = 0;
     }
@@ -65,7 +62,7 @@ impl DeadlockCache {
         let alg = alg as i8;
         loop {
             let entry = &self.entries[index];
-            if entry.hash == 0 {
+            if entry.hash == 0 || entry.generation != self.generation {
                 return (index, false);
             }
             if entry.hash == hash && entry.pull_mode == pull && entry.alg == alg {
@@ -105,6 +102,7 @@ impl DeadlockCache {
             self.entries[index] = CacheEntry {
                 hash,
                 queries: 0,
+                generation: self.generation,
                 result,
                 pull_mode: pull,
                 alg: alg_id,
@@ -139,5 +137,26 @@ impl DeadlockCache {
 
     pub fn is_search_exceeded(result: i8) -> bool {
         result == SEARCH_EXCEEDED
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_hides_entries_from_the_previous_generation() {
+        let mut cache = DeadlockCache::new(10);
+        cache.insert(42, IS_DEADLOCK, false, SearchMode::Normal);
+        cache.update_queries(42, false, SearchMode::Normal);
+        assert_eq!(cache.get(42, false, SearchMode::Normal), Some(IS_DEADLOCK));
+        assert_eq!(cache.queries(42, false, SearchMode::Normal), 1);
+
+        cache.clear();
+        assert_eq!(cache.get(42, false, SearchMode::Normal), None);
+        assert_eq!(cache.queries(42, false, SearchMode::Normal), 0);
+
+        cache.insert(42, NOT_DEADLOCK, false, SearchMode::Normal);
+        assert_eq!(cache.get(42, false, SearchMode::Normal), Some(NOT_DEADLOCK));
     }
 }

@@ -185,6 +185,162 @@ fn worker_state(ctx: &LevelContext, config: &SchedulerConfig) -> Result<WorkerSt
     })
 }
 
+/// Reusable solver state for a level set, mirroring C++ `search_trees[]` and
+/// `helpers[]`: the tree arenas and deadlock caches are allocated once and
+/// each level rebuilds only its level-specific tables.
+#[derive(Default)]
+pub struct Solver {
+    workers: Vec<WorkerState>,
+    log_max_nodes: u32,
+}
+
+impl Solver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Prepares one tree and helper per core, reusing the previous level's.
+    fn prepare_workers(&mut self, ctx: &LevelContext, config: &SchedulerConfig) -> Result<()> {
+        if self.log_max_nodes != config.log_max_nodes {
+            self.workers.clear();
+            self.log_max_nodes = config.log_max_nodes;
+        }
+        let mut prepared = Vec::with_capacity(config.cores);
+        for mut worker in std::mem::take(&mut self.workers)
+            .into_iter()
+            .take(config.cores)
+        {
+            if worker.tree.prepare_for_level(config.log_max_nodes, ctx)? {
+                worker.helper.reset();
+                prepared.push(worker);
+            }
+        }
+        while prepared.len() < config.cores {
+            prepared.push(worker_state(ctx, config)?);
+        }
+        self.workers = prepared;
+        Ok(())
+    }
+
+    /// Runs a whole level with C++ scheduling semantics.
+    pub fn solve_level(
+        &mut self,
+        ctx: &LevelContext,
+        config: &SchedulerConfig,
+    ) -> Result<LevelRun> {
+        if !CORE_COUNTS.contains(&config.cores) {
+            return Err(SolveError::Internal(
+                "Number of cores should be 1/2/4/8".into(),
+            ));
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let perimeter = Perimeter::new(25);
+        let mut outcomes: Vec<Option<SolveOutcome>> = (0..config.cores).map(|_| None).collect();
+        let mut expansions = 0u64;
+
+        // Reuse the previous level's worker state when possible; C++ likewise
+        // allocates one tree per core for the whole level set.
+        self.prepare_workers(ctx, config)?;
+        let workers = &mut self.workers;
+
+        // C++ `start_time` is taken after preprocessing and tree set-up, so worker
+        // preparation must not consume the search budget.
+        let started = Instant::now();
+
+        let mut run_round_into =
+            |algs: &[usize], slots: &[usize], time_limit: Duration| -> Result<bool> {
+                let results =
+                    run_round(ctx, algs, config, time_limit, &perimeter, &cancel, workers);
+                let mut solved = false;
+                for (result, &slot) in results.into_iter().zip(slots) {
+                    let outcome = result?;
+                    expansions += outcome.expansions;
+                    solved |= outcome.solved;
+                    outcomes[slot] = Some(outcome);
+                }
+                Ok(solved)
+            };
+
+        let solved = if let Some(alg) = config.forced_alg {
+            if alg >= 8 {
+                return Err(SolveError::Internal(
+                    "algorithm number should be 0..7".into(),
+                ));
+            }
+            run_round_into(&[alg], &[0], full_phase(remaining(started, config)))?
+        } else {
+            match config.cores {
+                1 => {
+                    let mut solved = false;
+                    for alg in 0..8 {
+                        let budget = scaled(remaining(started, config), 1.0 / (8 - alg) as f64);
+                        solved = run_round_into(&[alg], &[0], budget)?;
+                        if solved {
+                            break;
+                        }
+                    }
+                    solved
+                }
+                2 => {
+                    let mut solved = false;
+                    for round in 0..4 {
+                        let budget = scaled(remaining(started, config), 1.0 / (4 - round) as f64);
+                        let algs = [round * 2, round * 2 + 1];
+                        solved = run_round_into(&algs, &[0, 1], budget)?;
+                        if solved {
+                            break;
+                        }
+                    }
+                    solved
+                }
+                4 => {
+                    let mut solved = false;
+                    for round in 0..2 {
+                        let budget = scaled(remaining(started, config), 1.0 / (2 - round) as f64);
+                        let algs = [round * 4, round * 4 + 1, round * 4 + 2, round * 4 + 3];
+                        solved = run_round_into(&algs, &[0, 1, 2, 3], budget)?;
+                        if solved {
+                            break;
+                        }
+                    }
+                    solved
+                }
+                8 => {
+                    let budget = remaining(started, config);
+                    let algs = [0, 1, 2, 3, 4, 5, 6, 7];
+                    run_round_into(&algs, &[0, 1, 2, 3, 4, 5, 6, 7], budget)?
+                }
+                _ => unreachable!("core count validated above"),
+            }
+        };
+
+        let failure_reason = if solved {
+            None
+        } else {
+            outcomes
+                .iter()
+                .flatten()
+                .filter_map(|outcome| outcome.failure_reason)
+                .next_back()
+                .or(Some("Unknown reason"))
+        };
+
+        Ok(LevelRun {
+            solved,
+            failure_reason,
+            outcomes,
+            elapsed: started.elapsed(),
+            expansions,
+        })
+    }
+}
+
+/// Runs a whole level with a one-shot worker set.
+pub fn solve_level(ctx: &LevelContext, config: &SchedulerConfig) -> Result<LevelRun> {
+    Solver::new().solve_level(ctx, config)
+}
+
 /// Runs one round concurrently, returning outcomes in strategy order.
 fn run_round(
     ctx: &LevelContext,
@@ -224,123 +380,6 @@ fn run_round(
                     .unwrap_or_else(|_| Err(SolveError::Internal("solver thread panicked".into())))
             })
             .collect()
-    })
-}
-
-/// Runs a whole level with C++ scheduling semantics.
-pub fn solve_level(ctx: &LevelContext, config: &SchedulerConfig) -> Result<LevelRun> {
-    if !CORE_COUNTS.contains(&config.cores) {
-        return Err(SolveError::Internal(
-            "Number of cores should be 1/2/4/8".into(),
-        ));
-    }
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    let perimeter = Perimeter::new(25);
-    let mut outcomes: Vec<Option<SolveOutcome>> = (0..config.cores).map(|_| None).collect();
-    let mut expansions = 0u64;
-
-    // C++ allocates one tree per core for the whole level; prepare the
-    // per-level deadlock tables once per core.
-    let mut workers: Vec<WorkerState> = (0..config.cores)
-        .map(|_| worker_state(ctx, config))
-        .collect::<Result<_>>()?;
-
-    // C++ `start_time` is taken after preprocessing and tree set-up, so worker
-    // preparation must not consume the search budget.
-    let started = Instant::now();
-
-    let mut run_round_into =
-        |algs: &[usize], slots: &[usize], time_limit: Duration| -> Result<bool> {
-            let results = run_round(
-                ctx,
-                algs,
-                config,
-                time_limit,
-                &perimeter,
-                &cancel,
-                &mut workers,
-            );
-            let mut solved = false;
-            for (result, &slot) in results.into_iter().zip(slots) {
-                let outcome = result?;
-                expansions += outcome.expansions;
-                solved |= outcome.solved;
-                outcomes[slot] = Some(outcome);
-            }
-            Ok(solved)
-        };
-
-    let solved = if let Some(alg) = config.forced_alg {
-        if alg >= 8 {
-            return Err(SolveError::Internal(
-                "algorithm number should be 0..7".into(),
-            ));
-        }
-        run_round_into(&[alg], &[0], full_phase(remaining(started, config)))?
-    } else {
-        match config.cores {
-            1 => {
-                let mut solved = false;
-                for alg in 0..8 {
-                    let budget = scaled(remaining(started, config), 1.0 / (8 - alg) as f64);
-                    solved = run_round_into(&[alg], &[0], budget)?;
-                    if solved {
-                        break;
-                    }
-                }
-                solved
-            }
-            2 => {
-                let mut solved = false;
-                for round in 0..4 {
-                    let budget = scaled(remaining(started, config), 1.0 / (4 - round) as f64);
-                    let algs = [round * 2, round * 2 + 1];
-                    solved = run_round_into(&algs, &[0, 1], budget)?;
-                    if solved {
-                        break;
-                    }
-                }
-                solved
-            }
-            4 => {
-                let mut solved = false;
-                for round in 0..2 {
-                    let budget = scaled(remaining(started, config), 1.0 / (2 - round) as f64);
-                    let algs = [round * 4, round * 4 + 1, round * 4 + 2, round * 4 + 3];
-                    solved = run_round_into(&algs, &[0, 1, 2, 3], budget)?;
-                    if solved {
-                        break;
-                    }
-                }
-                solved
-            }
-            8 => {
-                let budget = remaining(started, config);
-                let algs = [0, 1, 2, 3, 4, 5, 6, 7];
-                run_round_into(&algs, &[0, 1, 2, 3, 4, 5, 6, 7], budget)?
-            }
-            _ => unreachable!("core count validated above"),
-        }
-    };
-
-    let failure_reason = if solved {
-        None
-    } else {
-        outcomes
-            .iter()
-            .flatten()
-            .filter_map(|outcome| outcome.failure_reason)
-            .next_back()
-            .or(Some("Unknown reason"))
-    };
-
-    Ok(LevelRun {
-        solved,
-        failure_reason,
-        outcomes,
-        elapsed: started.elapsed(),
-        expansions,
     })
 }
 
@@ -407,6 +446,44 @@ mod tests {
             assert!(run.solved, "cores {cores}");
             assert_eq!(run.outcomes.len(), cores);
             assert!(!run.solutions(false).is_empty(), "cores {cores}");
+        }
+    }
+
+    #[test]
+    fn reused_solver_matches_a_fresh_one() {
+        let ctx = context("#######\n#@ $ .#\n#######\n");
+        let config = config(1);
+        let fresh = solve_level(&ctx, &config).unwrap();
+        let mut solver = Solver::new();
+        let first = solver.solve_level(&ctx, &config).unwrap();
+        let second = solver.solve_level(&ctx, &config).unwrap();
+        for run in [&first, &second] {
+            assert_eq!(run.solved, fresh.solved);
+            assert_eq!(run.expansions, fresh.expansions);
+            let moves = run.outcomes[0].as_ref().unwrap().moves;
+            assert_eq!(moves, fresh.outcomes[0].as_ref().unwrap().moves);
+        }
+    }
+
+    #[test]
+    fn reused_solver_handles_geometry_changes() {
+        let narrow = context("#######\n#@ $ .#\n#######\n");
+        let wide = context("#########\n#@ $ .  #\n#       #\n#########\n");
+        let config = config(1);
+        let mut solver = Solver::new();
+        let runs = [
+            solver.solve_level(&narrow, &config).unwrap(),
+            solver.solve_level(&wide, &config).unwrap(),
+            solver.solve_level(&narrow, &config).unwrap(),
+        ];
+        for (level, run) in [&narrow, &wide, &narrow].into_iter().zip(runs) {
+            let fresh = solve_level(level, &config).unwrap();
+            assert_eq!(run.solved, fresh.solved);
+            assert_eq!(run.expansions, fresh.expansions);
+            assert_eq!(
+                run.outcomes[0].as_ref().unwrap().moves,
+                fresh.outcomes[0].as_ref().unwrap().moves
+            );
         }
     }
 

@@ -66,6 +66,13 @@ impl Graph {
         }
     }
 
+    /// True when this graph was sized for `level`'s geometry.
+    pub fn matches_level(&self, level: &Level) -> bool {
+        self.current_impossible.width() == level.initial.width()
+            && self.current_impossible.height() == level.initial.height()
+            && self.vertices.len() == level.index_num() * 4
+    }
+
     pub fn build(&mut self, level: &Level, board: &Board, pull_mode: bool) {
         debug_assert!(!board.contains_boxes());
         self.vertices_num = level.index_num() * 4;
