@@ -10,6 +10,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+publish = false
 
 [workspace.dependencies]
 festival-core = { path = "crates/festival-core" }

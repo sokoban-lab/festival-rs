@@ -3,6 +3,7 @@ name = "festival-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "Command line front end for festival-rs"
 
 [[bin]]
