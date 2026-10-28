@@ -97,6 +97,80 @@ fn main() -> ExitCode {
         );
     }
 
+    if args.first().map(String::as_str) == Some("soak") {
+        if args.len() != 5 {
+            eprintln!("usage: festival-bench soak <levels.sok> <seconds> <max_expansions> <cores>");
+            return ExitCode::FAILURE;
+        }
+        let seconds: u64 = args[2].parse().unwrap_or(0);
+        let max_expansions: u64 = args[3].parse().unwrap_or(5000);
+        let cores: usize = args[4].parse().unwrap_or(1);
+        return soak(Path::new(&args[1]), seconds, max_expansions, cores);
+    }
+
+    if args.first().map(String::as_str) == Some("wallify-dump") {
+        if args.len() != 5 {
+            eprintln!("usage: festival-bench wallify-dump <levels.sok> <level> <boards> <out>");
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        return wallify_dump(
+            Path::new(&args[1]),
+            level_number,
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+        );
+    }
+
+    if args.first().map(String::as_str) == Some("move-dump") {
+        if args.len() != 5 {
+            eprintln!("usage: festival-bench move-dump <levels.sok> <level> <boards> <out>");
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        return move_dump(
+            Path::new(&args[1]),
+            level_number,
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+        );
+    }
+
+    if args.first().map(String::as_str) == Some("fwb-score") {
+        if args.len() != 6 {
+            eprintln!(
+                "usage: festival-bench fwb-score <levels.sok> <level> <plan.txt> <boards> <out>"
+            );
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        return fwb_score(
+            Path::new(&args[1]),
+            level_number,
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+            Path::new(&args[5]),
+        );
+    }
+
+    if args.first().map(String::as_str) == Some("fwb-run") {
+        if args.len() != 6 {
+            eprintln!(
+                "usage: festival-bench fwb-run <levels.sok> <level> <plan.txt> <max_expansions> <out.boards>"
+            );
+            return ExitCode::FAILURE;
+        }
+        let level_number: usize = args[2].parse().unwrap_or(0);
+        let max_expansions: u64 = args[4].parse().unwrap_or(0);
+        return fwb_run(
+            Path::new(&args[1]),
+            level_number,
+            Path::new(&args[3]),
+            max_expansions,
+            Path::new(&args[5]),
+        );
+    }
+
     if args.first().map(String::as_str) == Some("snail-state") {
         if args.len() != 3 {
             eprintln!("usage: festival-bench snail-state <levels.sok> <level>");
@@ -280,6 +354,527 @@ fn dragonfly_stats(levels_path: &Path, level_number: usize, seconds: u64) -> Exi
                 index, node.depth, node.father, node.dist, node.packed, node.hash
             );
         }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Runs the FORWARD_WITH_BASES search from a fixed plan and dumps every
+/// expansion board, so C++ can score/check the exact Rust nodes.
+fn fwb_run(
+    levels_path: &Path,
+    level_number: usize,
+    plan_path: &Path,
+    max_expansions: u64,
+    out_path: &Path,
+) -> ExitCode {
+    use festival_core::constants::SearchMode;
+    use festival_core::planning::{oop, park_order};
+    use festival_core::search::fess::{FessConfig, run_fess_into};
+    use festival_core::search::perimeter::Perimeter;
+    use festival_core::search::tree::Tree;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let plan = match load_plan(plan_path) {
+        Ok(plan) => plan,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut helper = Helper {
+        parking_order: plan,
+        ..Helper::default()
+    };
+    if let Err(err) = park_order::verify_parking_order(&ctx, &helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = park_order::reduce_parking_order(&ctx, &mut helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = oop::prepare_oop_zones(&ctx, &mut helper) {
+        eprintln!("oop: {err}");
+        return ExitCode::FAILURE;
+    }
+
+    let mut tree = match Tree::new_with_level(20, &ctx.level) {
+        Ok(tree) => tree,
+        Err(err) => {
+            eprintln!("tree: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = tree.prepare_deadlock(&ctx) {
+        eprintln!("deadlock: {err}");
+        return ExitCode::FAILURE;
+    }
+    let perimeter = Perimeter::new(25);
+    let config = FessConfig {
+        time_limit: None,
+        max_expansions: Some(max_expansions),
+        log_max_nodes: 20,
+        save_best: false,
+        cancel: None,
+    };
+    let run = match run_fess_into(
+        &ctx,
+        &config,
+        SearchMode::ForwardWithBases,
+        &mut tree,
+        &mut helper,
+        &perimeter,
+    ) {
+        Ok(run) => run,
+        Err(err) => {
+            eprintln!("fess: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let width = ctx.level.initial.width();
+    let height = ctx.level.initial.height();
+    let mut out = String::new();
+    for id in 0..tree.expansions.len() {
+        let Ok(board) = tree.expansion_board(id as u32) else {
+            continue;
+        };
+        let mut hex = String::with_capacity(width * height * 2);
+        for y in 0..height {
+            for x in 0..width {
+                hex.push_str(&format!("{:02x}", board.cell(y, x)));
+            }
+        }
+        out.push_str(&format!("{} {hex}\n", board.hash()));
+    }
+    if let Err(err) = fs::write(out_path, out) {
+        eprintln!("{}: {err}", out_path.display());
+        return ExitCode::FAILURE;
+    }
+    eprintln!(
+        "expansions {} solved {} nodes {}",
+        run.expansions,
+        run.solved,
+        tree.expansions.len()
+    );
+    ExitCode::SUCCESS
+}
+
+/// Repeats preprocessing + solving in one process; the G7 soak driver polls
+/// this process's RSS to detect leaks.
+fn soak(levels_path: &Path, seconds: u64, max_expansions: u64, cores: usize) -> ExitCode {
+    use festival_core::solver::scheduler::{SchedulerConfig, solve_level};
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    if raws.is_empty() {
+        eprintln!("no levels");
+        return ExitCode::FAILURE;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut iterations = 0u64;
+    let mut solved = 0u64;
+    let mut failures = 0u64;
+
+    while Instant::now() < deadline {
+        for raw in &raws {
+            let started = Instant::now();
+            let level = match Level::preprocess(raw.clone()) {
+                Ok(level) => level,
+                Err(_) => {
+                    failures += 1;
+                    continue;
+                }
+            };
+            let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+            let ctx = match LevelContext::analyse(level, &clock) {
+                Ok(ctx) => ctx,
+                Err(_) => {
+                    failures += 1;
+                    continue;
+                }
+            };
+            let config = SchedulerConfig {
+                cores,
+                forced_alg: None,
+                time_limit: Duration::from_secs(600),
+                max_expansions: Some(max_expansions),
+                log_max_nodes: 16,
+                save_best: false,
+            };
+            match solve_level(&ctx, &config) {
+                Ok(run) => {
+                    if run.solved {
+                        solved += 1;
+                    } else if run.failure_reason == Some("Unknown reason") {
+                        failures += 1;
+                    }
+                }
+                Err(_) => failures += 1,
+            }
+            iterations += 1;
+            if iterations % 50 == 0 {
+                println!(
+                    "soak iterations {iterations} solved {solved} failures {failures} last_ms {}",
+                    started.elapsed().as_millis()
+                );
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+    }
+
+    println!("soak done iterations {iterations} solved {solved} failures {failures}");
+    ExitCode::SUCCESS
+}
+
+/// Mirrors `refcheck wallify`: fixed-box wallification before move generation.
+fn wallify_dump(
+    levels_path: &Path,
+    level_number: usize,
+    boards_path: &Path,
+    out_path: &Path,
+) -> ExitCode {
+    use festival_core::deadlock::fixed_boxes::turn_fixed_boxes_into_walls;
+    use festival_core::deadlock::state::DeadlockState;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let state = match DeadlockState::prepare(&ctx) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("deadlock: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let boards_text = match fs::read_to_string(boards_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{}: {err}", boards_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let width = ctx.level.initial.width();
+    let height = ctx.level.initial.height();
+    let mut out = String::new();
+    for line in boards_text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(hex) = fields.next() else {
+            continue;
+        };
+        let Some(data) = hex_board(hex, width, height) else {
+            eprintln!("bad board hex on level {level_number}");
+            return ExitCode::FAILURE;
+        };
+        let board = match Board::from_bytes(width, height, &data) {
+            Ok(board) => board,
+            Err(err) => {
+                eprintln!("board: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut cleared = board;
+        cleared.clear_deadlock_zone_inplace();
+        let wallified =
+            turn_fixed_boxes_into_walls(&ctx.level, &ctx.distances, &cleared, &state.envelopes);
+        out.push_str(hash);
+        out.push(' ');
+        for y in 0..height {
+            for x in 0..width {
+                out.push_str(&format!("{:02x}", wallified.cell(y, x)));
+            }
+        }
+        out.push('\n');
+    }
+    if let Err(err) = fs::write(out_path, out) {
+        eprintln!("{}: {err}", out_path.display());
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Mirrors `refcheck moves`: forward move generation on existing boards.
+fn move_dump(
+    levels_path: &Path,
+    level_number: usize,
+    boards_path: &Path,
+    out_path: &Path,
+) -> ExitCode {
+    use festival_core::constants::SearchMode;
+    use festival_core::deadlock::state::DeadlockState;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut state = match DeadlockState::prepare(&ctx) {
+        Ok(state) => state,
+        Err(err) => {
+            eprintln!("deadlock: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut helper = Helper::default();
+    let boards_text = match fs::read_to_string(boards_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{}: {err}", boards_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let width = ctx.level.initial.width();
+    let height = ctx.level.initial.height();
+    let mut out = String::new();
+    for line in boards_text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(hex) = fields.next() else {
+            continue;
+        };
+        let Some(data) = hex_board(hex, width, height) else {
+            eprintln!("bad board hex on level {level_number}");
+            return ExitCode::FAILURE;
+        };
+        let board = match Board::from_bytes(width, height, &data) {
+            Ok(board) => board,
+            Err(err) => {
+                eprintln!("board: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        helper.reset();
+        let (moves, has_corral) = match find_possible_moves(
+            &ctx,
+            &board,
+            false,
+            SearchMode::ForwardWithBases,
+            &mut helper,
+            &mut state,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                eprintln!("moves: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        out.push_str(&format!(
+            "{hash} {} {}\n",
+            u8::from(has_corral),
+            moves.len()
+        ));
+        for mv in &moves {
+            out.push_str(&format!(
+                "  {} {} {} {} {} {} {} {} {}\n",
+                mv.from,
+                mv.to,
+                mv.sokoban_position,
+                u8::from(mv.kill),
+                u8::from(mv.base),
+                u8::from(mv.pull),
+                mv.attr.weight,
+                u8::from(mv.attr.advisor),
+                u8::from(mv.attr.reversible),
+            ));
+        }
+    }
+    if let Err(err) = fs::write(out_path, out) {
+        eprintln!("{}: {err}", out_path.display());
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Mirrors `refcheck fwb`: FORWARD_WITH_BASES scores after planning.
+fn fwb_score(
+    levels_path: &Path,
+    level_number: usize,
+    plan_path: &Path,
+    boards_path: &Path,
+    out_path: &Path,
+) -> ExitCode {
+    use festival_core::constants::SearchMode;
+    use festival_core::planning::{oop, park_order};
+    use festival_core::search::score::score_board;
+
+    let raws = match load_levels(levels_path) {
+        Ok(raws) => raws,
+        Err(err) => {
+            eprintln!("{}: {err}", levels_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(raw) = raws.into_iter().nth(level_number.saturating_sub(1)) else {
+        eprintln!("no such level: {level_number}");
+        return ExitCode::FAILURE;
+    };
+    let level = match Level::preprocess(raw) {
+        Ok(level) => level,
+        Err(err) => {
+            eprintln!("level {level_number}: {}", err.reason());
+            return ExitCode::FAILURE;
+        }
+    };
+    let clock = SearchClock::new(Some(Duration::from_secs(600)), None);
+    let ctx = match LevelContext::analyse(level, &clock) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            eprintln!("level {level_number}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let plan = match load_plan(plan_path) {
+        Ok(plan) => plan,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut helper = Helper {
+        parking_order: plan,
+        ..Helper::default()
+    };
+    if let Err(err) = park_order::verify_parking_order(&ctx, &helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = park_order::reduce_parking_order(&ctx, &mut helper) {
+        eprintln!("plan: {err}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(err) = oop::prepare_oop_zones(&ctx, &mut helper) {
+        eprintln!("oop: {err}");
+        return ExitCode::FAILURE;
+    }
+    helper.init_scored_distance(&ctx, &ctx.level.board, false);
+
+    let boards_text = match fs::read_to_string(boards_path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{}: {err}", boards_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let width = ctx.level.initial.width();
+    let height = ctx.level.initial.height();
+    let mut out = String::new();
+    for line in boards_text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(hash) = fields.next() else {
+            continue;
+        };
+        let Some(hex) = fields.next() else {
+            continue;
+        };
+        let Some(data) = hex_board(hex, width, height) else {
+            eprintln!("bad board hex on level {level_number}");
+            return ExitCode::FAILURE;
+        };
+        let board = match Board::from_bytes(width, height, &data) {
+            Ok(board) => board,
+            Err(err) => {
+                eprintln!("board: {err}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let score = score_board(&ctx, &helper, &board, false, SearchMode::ForwardWithBases);
+        out.push_str(&format!(
+            "{hash} {} {} {} {} {} {} {}\n",
+            score.boxes_in_level,
+            score.packed_boxes,
+            score.connectivity,
+            score.rooms_score,
+            score.out_of_plan,
+            score.hotspots,
+            score.dist_to_targets,
+        ));
+    }
+    if let Err(err) = fs::write(out_path, out) {
+        eprintln!("{}: {err}", out_path.display());
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

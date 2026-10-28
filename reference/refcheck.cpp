@@ -21,12 +21,14 @@
 #include "deadlock_cache.h"
 #include "advanced_deadlock.h"
 #include "deadlock_utils.h"
+#include "fixed_boxes.h"
 #include "preprocess.h"
 #include "io.h"
 #include "packing_search.h"
 #include "tree.h"
 #include "util.h"
 #include "park_order.h"
+#include "oop.h"
 #include "score.h"
 #include "girl.h"
 #include "dragonfly.h"
@@ -55,6 +57,7 @@ void allocate_helpers();
 void free_helpers();
 int preprocess_level(board b);
 int board_is_deadlocked(board b, int pull_mode, int search_mode);
+void solve_with_alg(board b, int time_allocation, int strategy_index, helper* h);
 int advanced_deadlock_pull_mode(board b_in, int without_wobblers);
 int advanced_deadlock_search(board b, int pull_mode);
 int work_left_outside_deadlock_zone(board b);
@@ -430,6 +433,364 @@ static int run_explain(int argc, char** argv)
 	return 0;
 }
 
+// Runs one strategy exactly like `solve_with_time_control_single_core`, and
+// reports the expansions of the last FESS phase plus wall time. Used by the
+// Phase 7 performance gate; it does not alter solver behavior.
+static int run_solve(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	int alg = atoi(argv[4]);
+	int seconds = atoi(argv[5]);
+	int log_nodes = argc >= 7 ? atoi(argv[6]) : 23;
+	board start;
+	auto began = std::chrono::steady_clock::now();
+
+	if (alg < 0 || alg >= 8)
+	{
+		fprintf(stderr, "alg must be 0..7\n");
+		return 2;
+	}
+
+	verbose = 0;
+	cores_num = 1;
+	time_limit = seconds;
+	extra_mem = log_nodes - 23;
+	setvbuf(stdout, NULL, _IONBF, 0);
+
+	strcpy(global_level_set_name, levels);
+	level_id = level_number;
+	load_level_from_file(start, level_number);
+	allocate_search_trees();
+	allocate_helpers();
+
+	start_time = (int)time(0);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+	solve_with_alg(start, seconds, alg, helpers + 0);
+
+	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - began);
+	printf("solved %d\n", helpers[0].level_solved);
+	printf("expansions %d\n", search_trees[0].expansions_num);
+	printf("elapsed_ms %lld\n", (long long)elapsed.count());
+
+	free_helpers();
+	free_search_trees();
+	return 0;
+}
+
+static int load_parking_plan(const char* path, helper* h);
+
+// Scores boards exactly as the FORWARD_WITH_BASES phase does after planning.
+static int run_fwb_score(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	const char* plan_path = argv[4];
+	const char* boards_path = argv[5];
+	const char* out_path = argv[6];
+	board start;
+	helper h;
+	FILE* fb;
+	FILE* fo;
+	char line[8192];
+	int written = 0;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	level_id = level_number;
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	init_helper(&h);
+	init_helper_extra_fields(&h);
+	if (load_parking_plan(plan_path, &h) != 0)
+		return 1;
+	verify_parking_order(&h);
+	reduce_parking_order(&h);
+	prepare_oop_zones(&h);
+	init_scored_distance(start, 0, &h);
+
+	fb = fopen(boards_path, "rb");
+	fo = fopen(out_path, "wb");
+	if (fb == NULL || fo == NULL)
+	{
+		fprintf(stderr, "can't open boards/output\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), fb) != NULL)
+	{
+		unsigned long long hash;
+		char hex[8192];
+		board b;
+		score_element s;
+		int y, x;
+
+		if (sscanf(line, "%llu %8191s", &hash, hex) != 2)
+			continue;
+
+		memset(b, 0, sizeof(board));
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+			{
+				unsigned int value;
+				sscanf(hex + 2 * (y * width + x), "%02x", &value);
+				b[y][x] = (unsigned char)value;
+			}
+
+		memset(&s, 0, sizeof(s));
+		score_board(b, &s, 0, FORWARD_WITH_BASES, &h);
+		fprintf(fo, "%llu %d %d %d %d %d %d %d\n",
+			hash, s.boxes_in_level, s.packed_boxes, s.connectivity,
+			s.rooms_score, s.out_of_plan, s.hotspots, s.dist_to_targets);
+		written++;
+	}
+
+	fclose(fb);
+	fclose(fo);
+	free_helper(&h);
+	printf("level %d: %d fwb score rows\n", level_number, written);
+	return 0;
+}
+
+// Evaluates C++ deadlock verdicts on an existing (hash, hex) board list.
+static int run_verdicts(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	const char* boards_path = argv[4];
+	const char* out_path = argv[5];
+	board start;
+	FILE* fb;
+	FILE* fo;
+	char line[8192];
+	int written = 0;
+	auto began = std::chrono::steady_clock::now();
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	level_id = level_number;
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	fb = fopen(boards_path, "rb");
+	fo = fopen(out_path, "wb");
+	if (fb == NULL || fo == NULL)
+	{
+		fprintf(stderr, "can't open boards/output\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), fb) != NULL)
+	{
+		unsigned long long hash;
+		char hex[8192];
+		board b;
+		int y, x;
+		int push, pull;
+
+		if (sscanf(line, "%llu %8191s", &hash, hex) != 2)
+			continue;
+
+		memset(b, 0, sizeof(board));
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+			{
+				unsigned int value;
+				sscanf(hex + 2 * (y * width + x), "%02x", &value);
+				b[y][x] = (unsigned char)value;
+			}
+
+		push = board_is_deadlocked(b, 0, NORMAL);
+		pull = board_is_deadlocked(b, 1, NORMAL);
+		fprintf(fo, "%llu %s %d %d\n", hash, hex, push, pull);
+		written++;
+	}
+
+	fclose(fb);
+	fclose(fo);
+	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - began);
+	printf("level %d: %d verdict rows in %lld ms\n", level_number, written,
+		(long long)elapsed.count());
+	return 0;
+}
+
+// Dumps `find_possible_moves` for existing (hash, hex) boards in forward mode.
+static int run_moves(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	const char* boards_path = argv[4];
+	const char* out_path = argv[5];
+	board start;
+	helper h;
+	FILE* fb;
+	FILE* fo;
+	char line[8192];
+	int written = 0;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	level_id = level_number;
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+	init_helper(&h);
+	init_helper_extra_fields(&h);
+
+	fb = fopen(boards_path, "rb");
+	fo = fopen(out_path, "wb");
+	if (fb == NULL || fo == NULL)
+	{
+		fprintf(stderr, "can't open boards/output\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), fb) != NULL)
+	{
+		unsigned long long hash;
+		char hex[8192];
+		board b;
+		move moves[MAX_MOVES];
+		int has_corral = 0;
+		int count;
+		int y, x, i;
+
+		if (sscanf(line, "%llu %8191s", &hash, hex) != 2)
+			continue;
+
+		memset(b, 0, sizeof(board));
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+			{
+				unsigned int value;
+				sscanf(hex + 2 * (y * width + x), "%02x", &value);
+				b[y][x] = (unsigned char)value;
+			}
+
+		reset_helper(&h);
+		count = find_possible_moves(b, moves, 0, &has_corral,
+			FORWARD_WITH_BASES, &h);
+		fprintf(fo, "%llu %d %d\n", hash, has_corral, count);
+		for (i = 0; i < count; i++)
+			fprintf(fo, "  %d %d %d %d %d %d %d %d %d\n",
+				moves[i].from, moves[i].to, moves[i].sokoban_position,
+				moves[i].kill, moves[i].base, moves[i].pull,
+				moves[i].attr.weight, moves[i].attr.advisor,
+				moves[i].attr.reversible);
+		written++;
+	}
+
+	fclose(fb);
+	fclose(fo);
+	free_helper(&h);
+	printf("level %d: %d move rows\n", level_number, written);
+	return 0;
+}
+
+// Dumps the fixed-box wallified board used by forward move generation.
+static int run_wallify(int argc, char** argv)
+{
+	const char* levels = argv[2];
+	int level_number = atoi(argv[3]);
+	const char* boards_path = argv[4];
+	const char* out_path = argv[5];
+	board start;
+	FILE* fb;
+	FILE* fo;
+	char line[8192];
+	int written = 0;
+
+	verbose = 0;
+	cores_num = 1;
+	extra_mem = 0;
+	time_limit = 600;
+	start_time = (int)time(0);
+
+	strcpy(global_level_set_name, levels);
+	level_id = level_number;
+	load_level_from_file(start, level_number);
+	if (preprocess_level(start) == 0)
+	{
+		fprintf(stderr, "level %d failed preprocessing\n", level_number);
+		return 1;
+	}
+
+	fb = fopen(boards_path, "rb");
+	fo = fopen(out_path, "wb");
+	if (fb == NULL || fo == NULL)
+	{
+		fprintf(stderr, "can't open boards/output\n");
+		return 1;
+	}
+
+	while (fgets(line, sizeof(line), fb) != NULL)
+	{
+		unsigned long long hash;
+		char hex[8192];
+		board b, c;
+		int y, x;
+
+		if (sscanf(line, "%llu %8191s", &hash, hex) != 2)
+			continue;
+
+		memset(b, 0, sizeof(board));
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+			{
+				unsigned int value;
+				sscanf(hex + 2 * (y * width + x), "%02x", &value);
+				b[y][x] = (unsigned char)value;
+			}
+
+		clear_deadlock_zone(b, c);
+		turn_fixed_boxes_into_walls(c, b);
+		fprintf(fo, "%llu ", hash);
+		for (y = 0; y < height; y++)
+			for (x = 0; x < width; x++)
+				fprintf(fo, "%02x", b[y][x]);
+		fprintf(fo, "\n");
+		written++;
+	}
+
+	fclose(fb);
+	fclose(fo);
+	printf("level %d: %d wallified rows\n", level_number, written);
+	return 0;
+}
+
 static int run_plan(int argc, char** argv)
 {
 	const char* levels = argv[2];
@@ -775,6 +1136,51 @@ int main(int argc, char** argv)
 		return run_deadlock(argc, argv);
 	}
 
+	if (argc >= 6 && strcmp(argv[1], "solve") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_solve(argc, argv);
+	}
+
+	if (argc >= 6 && strcmp(argv[1], "wallify") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_wallify(argc, argv);
+	}
+
+	if (argc >= 6 && strcmp(argv[1], "moves") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_moves(argc, argv);
+	}
+
+	if (argc >= 6 && strcmp(argv[1], "verdicts") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_verdicts(argc, argv);
+	}
+
+	if (argc >= 7 && strcmp(argv[1], "fwb") == 0)
+	{
+		allocate_perimeter();
+		allocate_deadlock_cache();
+		read_deadlock_patterns(0);
+		read_deadlock_patterns(1);
+		return run_fwb_score(argc, argv);
+	}
+
 	if (argc >= 6 && strcmp(argv[1], "plan") == 0)
 	{
 		allocate_perimeter();
@@ -813,6 +1219,9 @@ int main(int argc, char** argv)
 
 	fprintf(stderr,
 		"usage: refcheck deadlock <levels.sok> <level> <samples> <move_samples> <seed> <out_prefix>\n"
+		"       refcheck solve <levels.sok> <level> <alg> <seconds> [log_nodes]\n"
+		"       refcheck fwb <levels.sok> <level> <plan> <boards> <out>\n"
+		"       refcheck verdicts <levels.sok> <level> <boards> <out>\n"
 		"       refcheck plan <levels.sok> <level> <strategy> <log_nodes>\n"
 		"       refcheck girl <levels.sok> <level> <plan> <boards> <out>\n"
 		"       refcheck dragonfly <levels.sok> <level> <seconds>\n");
