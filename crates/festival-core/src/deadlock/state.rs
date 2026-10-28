@@ -146,7 +146,9 @@ impl DeadlockState {
 
     /// Per-level initialization in `preprocess_level` order.
     pub fn prepare(ctx: &LevelContext) -> crate::error::Result<Self> {
-        let mut state = Self::new(20);
+        // C++ sizes the process-wide cache by core count (22/23/24/25); each
+        // Rust worker owns a 22-bit cache, so the total footprint matches.
+        let mut state = Self::new(22);
         state.rooms = init_rooms_deadlock(ctx);
         crate::deadlock::mpdb::build_mpdb2(ctx, &mut state)?;
         crate::deadlock::mpdb::build_pull_mpdb2(ctx, &mut state)?;
