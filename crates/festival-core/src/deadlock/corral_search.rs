@@ -439,6 +439,16 @@ pub fn corral_deadlock(
     board_in: &Board,
     pull_mode: bool,
 ) -> Result<bool> {
+    corral_deadlock_prepared(ctx, state, board_in, None, pull_mode)
+}
+
+pub(crate) fn corral_deadlock_prepared(
+    ctx: &LevelContext,
+    state: &mut DeadlockState,
+    board_in: &Board,
+    wallified: Option<&Board>,
+    pull_mode: bool,
+) -> Result<bool> {
     if board_in.is_solved(pull_mode, &ctx.level.initial, ctx.level.initial_sokoban) {
         return Ok(false);
     }
@@ -447,12 +457,15 @@ pub fn corral_deadlock(
         return advanced_deadlock_pull_mode(ctx, state, board_in, false);
     }
 
-    let b = crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
-        &ctx.level,
-        &ctx.distances,
-        board_in,
-        &state.envelopes,
-    );
+    let b = match wallified {
+        Some(board) => *board,
+        None => crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+            &ctx.level,
+            &ctx.distances,
+            board_in,
+            &state.envelopes,
+        ),
+    };
 
     let mut dist = [INF; MAX_INNER];
     let connect_num = crate::bfs::mark_connectivities(&ctx.level, &b, &mut dist);

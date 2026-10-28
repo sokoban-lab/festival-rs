@@ -8,6 +8,7 @@
 
 use crate::board::Board;
 use crate::constants::{INF, MAX_INNER};
+use crate::graph::Graph;
 use crate::moves::Move;
 use crate::planning::{ImagineData, OopData, ParkOrder};
 use crate::search::features::RequestData;
@@ -36,6 +37,10 @@ pub struct Helper {
     pub boxes_were_removed: bool,
     pub oop: Option<OopData>,
     pub imagine: Option<ImagineData>,
+
+    /// Reused `find_possible_moves` buffers (moves scratch and box graph).
+    pub move_scratch: Vec<Move>,
+    pub graph_scratch: Option<Graph>,
 }
 
 impl Default for Helper {
@@ -61,6 +66,8 @@ impl Default for Helper {
             boxes_were_removed: false,
             oop: None,
             imagine: None,
+            move_scratch: Vec::new(),
+            graph_scratch: None,
         }
     }
 }

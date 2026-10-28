@@ -184,99 +184,111 @@ pub fn find_possible_moves(
         }
     }
 
-    let mut graph = Graph::new(level);
-    let mut scratch = vec![Move::default(); MAX_MOVES];
+    let mut scratch = std::mem::take(&mut helper.move_scratch);
+    if scratch.len() < MAX_MOVES {
+        scratch.resize(MAX_MOVES, Move::default());
+    }
+    let mut graph = helper
+        .graph_scratch
+        .take()
+        .unwrap_or_else(|| Graph::new(level));
     let mut moves: Vec<Move> = Vec::new();
 
-    for index in 0..level.index_num() {
-        let (y, x) = level.coord(index);
+    let result = (|| -> Result<(Vec<Move>, bool)> {
+        for index in 0..level.index_num() {
+            let (y, x) = level.coord(index);
 
-        if has_corral && corral_options.cell(y, x) & BOX == 0 {
-            continue;
-        }
-        if search_mode == SearchMode::RevSearch
-            && pull_mode
-            && !helper.perimeter_found
-            && helper.wallified.cell(y, x) != 0
-        {
-            continue;
-        }
-        if board.cell(y, x) & BOX == 0 {
-            continue;
-        }
-        if !box_can_be_moved(level, &ctx.distances, &board, index, pull_mode) {
-            continue;
-        }
+            if has_corral && corral_options.cell(y, x) & BOX == 0 {
+                continue;
+            }
+            if search_mode == SearchMode::RevSearch
+                && pull_mode
+                && !helper.perimeter_found
+                && helper.wallified.cell(y, x) != 0
+            {
+                continue;
+            }
+            if board.cell(y, x) & BOX == 0 {
+                continue;
+            }
+            if !box_can_be_moved(level, &ctx.distances, &board, index, pull_mode) {
+                continue;
+            }
 
-        graph.set_current_impossible(
-            level,
-            &board,
-            y,
-            x,
-            pull_mode,
-            &possible,
-            ctx.distances.impossible_slice(),
-        );
-        graph.mark_box_moves_in_graph(level, &board, index, pull_mode);
-        if matches!(
-            effective_mode,
-            SearchMode::Normal | SearchMode::WobblersSearch
-        ) {
-            graph.find_reversible_moves(level, &board, index, pull_mode);
-        }
+            graph.set_current_impossible(
+                level,
+                &board,
+                y,
+                x,
+                pull_mode,
+                &possible,
+                ctx.distances.impossible_slice(),
+            );
+            graph.mark_box_moves_in_graph(level, &board, index, pull_mode);
+            if matches!(
+                effective_mode,
+                SearchMode::Normal | SearchMode::WobblersSearch
+            ) {
+                graph.find_reversible_moves(level, &board, index, pull_mode);
+            }
 
-        let mut count = graph.get_box_moves(level, index, &mut scratch);
-        for mv in scratch.iter_mut().take(count) {
-            mv.pull = pull_mode;
-        }
+            let mut count = graph.get_box_moves(level, index, &mut scratch);
+            for mv in scratch.iter_mut().take(count) {
+                mv.pull = pull_mode;
+            }
 
-        let valid = check_deadlock_in_moves(
-            ctx,
-            deadlock,
-            &board,
-            &scratch[..count],
-            pull_mode,
-            effective_mode,
-            helper,
-        )?;
-        let mut kept = 0usize;
-        for i in 0..count {
-            if valid[i] {
-                scratch[kept] = scratch[i];
-                kept += 1;
+            let valid = check_deadlock_in_moves(
+                ctx,
+                deadlock,
+                &board,
+                &scratch[..count],
+                pull_mode,
+                effective_mode,
+                helper,
+            )?;
+            let mut kept = 0usize;
+            for i in 0..count {
+                if valid[i] {
+                    scratch[kept] = scratch[i];
+                    kept += 1;
+                }
+            }
+            count = kept;
+
+            let mut box_moves: Vec<Move> = scratch[..count].to_vec();
+            count = detect_kill_moves(
+                ctx,
+                deadlock,
+                board_in,
+                &board,
+                &mut box_moves,
+                effective_mode,
+                helper,
+            );
+
+            if count == 1 && box_moves[0].kill {
+                moves.clear();
+                moves.push(box_moves[0]);
+                break;
+            }
+
+            moves.extend_from_slice(&box_moves[..count]);
+
+            if moves.len() > MAX_MOVES - MAX_INNER {
+                return Err(SolveError::TooManyMoves);
             }
         }
-        count = kept;
 
-        let mut box_moves: Vec<Move> = scratch[..count].to_vec();
-        count = detect_kill_moves(
-            ctx,
-            deadlock,
-            board_in,
-            &board,
-            &mut box_moves,
-            effective_mode,
-            helper,
-        );
-
-        if count == 1 && box_moves[0].kill {
-            moves.clear();
-            moves.push(box_moves[0]);
-            break;
+        if search_mode == SearchMode::BaseSearch {
+            moves =
+                crate::planning::heuristics::mark_sink_squares_moves(ctx, deadlock, &board, moves)?;
         }
 
-        moves.extend_from_slice(&box_moves[..count]);
-
-        if moves.len() > MAX_MOVES - MAX_INNER {
-            return Err(SolveError::TooManyMoves);
-        }
-    }
-
-    if search_mode == SearchMode::BaseSearch {
-        moves = crate::planning::heuristics::mark_sink_squares_moves(ctx, deadlock, &board, moves)?;
-    }
-
-    Ok((moves, has_corral))
+        Ok((moves, has_corral))
+    })();
+    helper.move_scratch = scratch;
+    helper.graph_scratch = Some(graph);
+    result
 }
 
 /// Port of `apply_move`.

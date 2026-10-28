@@ -24,18 +24,21 @@ pub fn bfs_from_place(
     debug_assert!(dist.len() >= MAX_INNER);
     let occupied_mask = if ignore_boxes { WALL } else { OCCUPIED };
 
-    let mut current: Vec<usize> = Vec::with_capacity(MAX_INNER);
-    let mut next: Vec<usize> = Vec::with_capacity(MAX_INNER);
+    let mut current = [0u16; MAX_INNER];
+    let mut next = [0u16; MAX_INNER];
+    let mut cur: &mut [u16] = &mut current;
+    let mut nxt: &mut [u16] = &mut next;
+    let mut current_len = 1usize;
 
-    current.push(flat(start_y, start_x));
+    cur[0] = flat(start_y, start_x) as u16;
     dist[flat(start_y, start_x)] = 0;
     let mut d = 0u32;
 
-    while !current.is_empty() {
-        next.clear();
-        for &index in &current {
-            let y = index / MAX_SIZE;
-            let x = index % MAX_SIZE;
+    while current_len > 0 {
+        let mut next_len = 0usize;
+        for &index in &cur[..current_len] {
+            let y = index as usize / MAX_SIZE;
+            let x = index as usize % MAX_SIZE;
             for dir in 0..4 {
                 let ny = y as isize + DELTA_Y[dir];
                 let nx = x as isize + DELTA_X[dir];
@@ -49,12 +52,14 @@ pub fn bfs_from_place(
                 let next_index = flat(ny, nx);
                 if board.cell(ny, nx) & occupied_mask == 0 && dist[next_index] == INF {
                     dist[next_index] = d + 1;
-                    next.push(next_index);
+                    nxt[next_len] = next_index as u16;
+                    next_len += 1;
                 }
             }
         }
         d += 1;
-        std::mem::swap(&mut current, &mut next);
+        std::mem::swap(&mut cur, &mut nxt);
+        current_len = next_len;
     }
 }
 

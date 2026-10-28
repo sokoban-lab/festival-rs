@@ -433,6 +433,34 @@ pub(crate) fn check_matching_deadlock(
     pull_mode: bool,
     search_mode: SearchMode,
 ) -> Result<bool> {
+    let wallified = if pull_mode {
+        None
+    } else {
+        Some(crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+            &ctx.level,
+            &ctx.distances,
+            board_in,
+            &state.envelopes,
+        ))
+    };
+    check_matching_deadlock_prepared(
+        ctx,
+        state,
+        board_in,
+        wallified.as_ref(),
+        pull_mode,
+        search_mode,
+    )
+}
+
+fn check_matching_deadlock_prepared(
+    ctx: &LevelContext,
+    state: &mut DeadlockState,
+    board_in: &Board,
+    wallified: Option<&Board>,
+    pull_mode: bool,
+    search_mode: SearchMode,
+) -> Result<bool> {
     if search_mode == SearchMode::Dragonfly {
         return Ok(false);
     }
@@ -452,12 +480,15 @@ pub(crate) fn check_matching_deadlock(
     let b = if pull_mode {
         *board_in
     } else {
-        crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
-            level,
-            &ctx.distances,
-            board_in,
-            &state.envelopes,
-        )
+        match wallified {
+            Some(board) => *board,
+            None => crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+                level,
+                &ctx.distances,
+                board_in,
+                &state.envelopes,
+            ),
+        }
     };
 
     for i in 0..level.index_num() {
@@ -502,7 +533,7 @@ pub(crate) fn check_matching_deadlock(
     if !pull_mode {
         let mut empty = b;
         empty.clear_boxes_inplace();
-        let mut graph = Graph::new(level);
+        let mut graph = Graph::unbuilt(level);
         graph.build(level, &empty, false);
         graph.make_holes_inactive(level, &b);
 
@@ -617,12 +648,17 @@ fn eliminate_from_zone(base: &Board, final_pos: &Board, zones: &[u32; MAX_INNER]
 }
 
 fn try_pulling_all_zones(ctx: &LevelContext, state: &DeadlockState, board: &Board) -> bool {
-    let b = crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+    let wallified = crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
         &ctx.level,
         &ctx.distances,
         board,
         &state.envelopes,
     );
+    try_pulling_all_zones_prepared(ctx, &wallified)
+}
+
+fn try_pulling_all_zones_prepared(ctx: &LevelContext, b: &Board) -> bool {
+    let b = *b;
     let mut final_pos = b;
     final_pos.clear_boxes_inplace();
     final_pos.turn_targets_into_packed();
@@ -644,7 +680,25 @@ pub fn board_is_deadlocked(
     pull_mode: bool,
     search_mode: SearchMode,
 ) -> Result<bool> {
-    if check_matching_deadlock(ctx, state, board, pull_mode, search_mode)? {
+    let wallified = if pull_mode {
+        None
+    } else {
+        Some(crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls(
+            &ctx.level,
+            &ctx.distances,
+            board,
+            &state.envelopes,
+        ))
+    };
+
+    if check_matching_deadlock_prepared(
+        ctx,
+        state,
+        board,
+        wallified.as_ref(),
+        pull_mode,
+        search_mode,
+    )? {
         return Ok(true);
     }
 
@@ -652,8 +706,11 @@ pub fn board_is_deadlocked(
         return Ok(true);
     }
 
-    if !pull_mode && !try_pulling_all_zones(ctx, state, board) {
-        return Ok(true);
+    if !pull_mode {
+        let wallified = wallified.as_ref().expect("push mode wallified board");
+        if !try_pulling_all_zones_prepared(ctx, wallified) {
+            return Ok(true);
+        }
     }
 
     if is_stuck_deadlock(ctx, state, board, pull_mode) {
@@ -661,7 +718,13 @@ pub fn board_is_deadlocked(
     }
 
     if crate::bfs::get_connectivity(&ctx.level, board) != 1
-        && corral_deadlock(ctx, state, board, pull_mode)?
+        && crate::deadlock::corral_search::corral_deadlock_prepared(
+            ctx,
+            state,
+            board,
+            wallified.as_ref(),
+            pull_mode,
+        )?
     {
         return Ok(true);
     }

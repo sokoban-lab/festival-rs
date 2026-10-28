@@ -38,6 +38,7 @@ impl Default for Vertex {
     }
 }
 
+#[derive(Debug)]
 pub struct Graph {
     pub vertices: Vec<Vertex>,
     pub current_impossible: Board,
@@ -52,6 +53,16 @@ impl Graph {
             current_impossible: Board::new(level.initial.width(), level.initial.height())
                 .expect("level dimensions"),
             vertices_num,
+        }
+    }
+
+    /// Like `new`, but leaves the vertex array uninitialized; `build` fills it.
+    pub fn unbuilt(level: &Level) -> Self {
+        Self {
+            vertices: Vec::with_capacity(level.index_num() * 4),
+            current_impossible: Board::new(level.initial.width(), level.initial.height())
+                .expect("level dimensions"),
+            vertices_num: 0,
         }
     }
 
