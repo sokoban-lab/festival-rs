@@ -494,7 +494,7 @@ impl Graph {
         }
         self.do_iterations(pull_mode);
 
-        bfs::init_dist(dist);
+        bfs::init_dist(dist, board.width(), board.height());
         for i in 0..level.index_num() {
             let (y, x) = level.coord(i);
             dist[Board::flat_index(y, x)] = self.get_weight_around_cell(i);

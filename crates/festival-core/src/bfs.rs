@@ -10,35 +10,42 @@ pub fn flat(y: usize, x: usize) -> usize {
     y * MAX_SIZE + x
 }
 
-pub fn init_dist(dist: &mut [u32]) {
-    dist.fill(INF);
+/// Fills the logical rectangle with `INF`. Cells outside it are never read,
+/// matching C++ `init_dist`, which only clears `height` rows of `width` cells.
+pub fn init_dist(dist: &mut [u32], width: usize, height: usize) {
+    for y in 0..height {
+        let start = y * MAX_SIZE;
+        dist[start..start + width].fill(INF);
+    }
 }
 
-pub fn bfs_from_place(
+/// Breadth-first fill from one cell. `DISTANCES` selects whether the BFS depth
+/// or the constant `mark` is written into every reached cell.
+fn bfs_fill<const DISTANCES: bool>(
     board: &Board,
     dist: &mut [u32],
     start_y: usize,
     start_x: usize,
     ignore_boxes: bool,
+    mark: u32,
 ) {
     debug_assert!(dist.len() >= MAX_INNER);
     let occupied_mask = if ignore_boxes { WALL } else { OCCUPIED };
 
-    let mut current = [0u16; MAX_INNER];
-    let mut next = [0u16; MAX_INNER];
-    let mut cur: &mut [u16] = &mut current;
-    let mut nxt: &mut [u16] = &mut next;
-    let mut current_len = 1usize;
-
-    cur[0] = flat(start_y, start_x) as u16;
-    dist[flat(start_y, start_x)] = 0;
+    let mut queue = [0u16; MAX_INNER];
+    queue[0] = flat(start_y, start_x) as u16;
+    dist[flat(start_y, start_x)] = mark;
+    let mut head = 0usize;
+    let mut tail = 1usize;
     let mut d = 0u32;
 
-    while current_len > 0 {
-        let mut next_len = 0usize;
-        for &index in &cur[..current_len] {
-            let y = index as usize / MAX_SIZE;
-            let x = index as usize % MAX_SIZE;
+    while head < tail {
+        let level_end = tail;
+        while head < level_end {
+            let index = queue[head] as usize;
+            head += 1;
+            let y = index / MAX_SIZE;
+            let x = index % MAX_SIZE;
             for dir in 0..4 {
                 let ny = y as isize + DELTA_Y[dir];
                 let nx = x as isize + DELTA_X[dir];
@@ -51,20 +58,33 @@ pub fn bfs_from_place(
                 }
                 let next_index = flat(ny, nx);
                 if board.cell(ny, nx) & occupied_mask == 0 && dist[next_index] == INF {
-                    dist[next_index] = d + 1;
-                    nxt[next_len] = next_index as u16;
-                    next_len += 1;
+                    dist[next_index] = if DISTANCES { d + 1 } else { mark };
+                    queue[tail] = next_index as u16;
+                    tail += 1;
                 }
             }
         }
         d += 1;
-        std::mem::swap(&mut cur, &mut nxt);
-        current_len = next_len;
     }
 }
 
+pub fn bfs_from_place(
+    board: &Board,
+    dist: &mut [u32],
+    start_y: usize,
+    start_x: usize,
+    ignore_boxes: bool,
+) {
+    bfs_fill::<true>(board, dist, start_y, start_x, ignore_boxes, 0);
+}
+
+/// Marks one free component with a constant label (`mark_connectivities`).
+fn bfs_mark(board: &Board, dist: &mut [u32], start_y: usize, start_x: usize, mark: u32) {
+    bfs_fill::<false>(board, dist, start_y, start_x, false, mark);
+}
+
 pub fn bfs(board: &Board, dist: &mut [u32], start_y: usize, start_x: usize, ignore_boxes: bool) {
-    init_dist(dist);
+    init_dist(dist, board.width(), board.height());
     bfs_from_place(board, dist, start_y, start_x, ignore_boxes);
 }
 
@@ -93,9 +113,8 @@ pub fn get_connectivity(level: &Level, board: &Board) -> usize {
 }
 
 pub fn mark_connectivities(level: &Level, board: &Board, dist: &mut [u32]) -> usize {
-    let mut local = [INF; MAX_INNER];
     let mut components = 0usize;
-    init_dist(dist);
+    init_dist(dist, board.width(), board.height());
 
     for y in 0..board.height() {
         for x in 0..board.width() {
@@ -110,17 +129,7 @@ pub fn mark_connectivities(level: &Level, board: &Board, dist: &mut [u32]) -> us
                 continue;
             }
 
-            init_dist(&mut local);
-            bfs_from_place(board, &mut local, y, x, false);
-
-            for yy in 0..board.height() {
-                for xx in 0..board.width() {
-                    let local_idx = flat(yy, xx);
-                    if local[local_idx] < INF {
-                        dist[local_idx] = components as u32;
-                    }
-                }
-            }
+            bfs_mark(board, dist, y, x, components as u32);
             components += 1;
         }
     }
@@ -135,12 +144,11 @@ pub fn mark_connectivities_around_place(
     start_y: usize,
     start_x: usize,
 ) {
-    let mut local = [INF; MAX_INNER];
-    init_dist(dist);
+    init_dist(dist, board.width(), board.height());
 
-    for color in 0..4usize {
-        let y = start_y as isize + DELTA_Y[color];
-        let x = start_x as isize + DELTA_X[color];
+    for color in 0..4u32 {
+        let y = start_y as isize + DELTA_Y[color as usize];
+        let x = start_x as isize + DELTA_X[color as usize];
         if y < 0 || x < 0 {
             continue;
         }
@@ -156,17 +164,7 @@ pub fn mark_connectivities_around_place(
             continue;
         }
 
-        init_dist(&mut local);
-        bfs_from_place(board, &mut local, y, x, false);
-
-        for yy in 0..board.height() {
-            for xx in 0..board.width() {
-                let local_idx = flat(yy, xx);
-                if local[local_idx] < INF {
-                    dist[local_idx] = color as u32;
-                }
-            }
-        }
+        bfs_mark(board, dist, y, x, color);
     }
 }
 
@@ -239,7 +237,7 @@ pub fn get_srcs_of_all_targets(level: &Level, board: &Board) -> Board {
 
 /// Expands a group of cells through free cells, recording distances in `dist`.
 pub fn expand_group(level: &Level, board: &Board, group: &mut Board, dist: &mut [u32]) {
-    init_dist(dist);
+    init_dist(dist, board.width(), board.height());
     let mut current: Vec<usize> = Vec::with_capacity(MAX_INNER);
     let mut next: Vec<usize> = Vec::with_capacity(MAX_INNER);
 
