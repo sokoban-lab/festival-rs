@@ -112,8 +112,23 @@ fn remaining(started: Instant, config: &SchedulerConfig) -> Duration {
     config.time_limit.saturating_sub(started.elapsed())
 }
 
+/// C++ measures `time(0)` in whole seconds and stops only when
+/// `elapsed_seconds > budget`, so a budget of N seconds runs for up to N + 1.
+/// Budgets that truncate to zero still return zero (C++ skips the phase).
+fn seconds_with_cpp_slack(secs: u64) -> Duration {
+    if secs == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(secs + 1)
+    }
+}
+
 fn scaled(remaining: Duration, ratio: f64) -> Duration {
-    Duration::from_secs((remaining.as_secs() as f64 * ratio) as u64)
+    seconds_with_cpp_slack((remaining.as_secs() as f64 * ratio) as u64)
+}
+
+fn full_phase(remaining: Duration) -> Duration {
+    seconds_with_cpp_slack(remaining.as_secs())
 }
 
 fn strategy_config(
@@ -220,7 +235,6 @@ pub fn solve_level(ctx: &LevelContext, config: &SchedulerConfig) -> Result<Level
         ));
     }
 
-    let started = Instant::now();
     let cancel = Arc::new(AtomicBool::new(false));
     let perimeter = Perimeter::new(25);
     let mut outcomes: Vec<Option<SolveOutcome>> = (0..config.cores).map(|_| None).collect();
@@ -231,6 +245,10 @@ pub fn solve_level(ctx: &LevelContext, config: &SchedulerConfig) -> Result<Level
     let mut workers: Vec<WorkerState> = (0..config.cores)
         .map(|_| worker_state(ctx, config))
         .collect::<Result<_>>()?;
+
+    // C++ `start_time` is taken after preprocessing and tree set-up, so worker
+    // preparation must not consume the search budget.
+    let started = Instant::now();
 
     let mut run_round_into =
         |algs: &[usize], slots: &[usize], time_limit: Duration| -> Result<bool> {
@@ -259,7 +277,7 @@ pub fn solve_level(ctx: &LevelContext, config: &SchedulerConfig) -> Result<Level
                 "algorithm number should be 0..7".into(),
             ));
         }
-        run_round_into(&[alg], &[0], remaining(started, config))?
+        run_round_into(&[alg], &[0], full_phase(remaining(started, config)))?
     } else {
         match config.cores {
             1 => {
@@ -415,5 +433,15 @@ mod tests {
     fn invalid_core_count_is_rejected() {
         let ctx = context("#######\n#@ $ .#\n#######\n");
         assert!(solve_level(&ctx, &config(3)).is_err());
+    }
+
+    #[test]
+    fn phase_budgets_match_cpp_integer_clock() {
+        assert_eq!(
+            scaled(Duration::from_secs(60), 1.0 / 8.0),
+            Duration::from_secs(8)
+        );
+        assert_eq!(scaled(Duration::from_secs(1), 1.0 / 8.0), Duration::ZERO);
+        assert_eq!(full_phase(Duration::from_secs(60)), Duration::from_secs(61));
     }
 }

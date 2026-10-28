@@ -144,13 +144,11 @@ fn is_corral_active(board: &Board, cd: &CorralData) -> bool {
     let corral_boxes = get_corral_boxes(board, cd);
     for y in 0..board.height() {
         for x in 0..board.width() {
-            if cd.corral.cell(y, x) == 0 {
-                continue;
-            }
-            let cell = corral_boxes.cell(y, x);
-            if cell == (TARGET | SOKOBAN) {
+            if cd.corral.cell(y, x) != 0 && corral_boxes.cell(y, x) == (TARGET | SOKOBAN) {
                 return true;
             }
+            // `corral_boxes` marks the box ring around the corral; C++ checks
+            // the whole board here, not only corral cells.
             if corral_boxes.cell(y, x) == BOX {
                 return true;
             }

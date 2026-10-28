@@ -223,35 +223,31 @@ pub fn conclude_parking(
 
 /// Port of `score_parked_boxes`.
 pub fn score_parked_boxes(ctx: &LevelContext, board: &Board, helper: &Helper) -> i32 {
-    let has_box: Vec<bool> = helper
-        .parking_order
-        .iter()
-        .map(|step| {
-            if step.to < 0 {
-                return false;
-            }
-            let (y, x) = ctx.level.coord(step.to as usize);
-            board.cell(y, x) & BOX != 0
-        })
-        .collect();
+    let count = helper.parking_order.len().min(MAX_SOL_LEN);
+    let plan = &helper.parking_order[..count];
+    let mut has_box = [false; MAX_SOL_LEN];
+    for (i, step) in plan.iter().enumerate() {
+        if step.to < 0 {
+            continue;
+        }
+        let (y, x) = ctx.level.coord(step.to as usize);
+        has_box[i] = board.cell(y, x) & BOX != 0;
+    }
+    let has_box = &has_box[..count];
 
-    let init_num = helper
-        .parking_order
-        .iter()
-        .filter(|step| step.from == FROM_INIT)
-        .count();
+    let init_num = plan.iter().filter(|step| step.from == FROM_INIT).count();
 
-    if mandatory_inits_missing(&has_box, init_num) {
-        return get_number_of_mandatory_inits(&has_box, init_num);
+    if mandatory_inits_missing(has_box, plan, init_num) {
+        return get_number_of_mandatory_inits(has_box, plan, init_num);
     }
 
-    let mut packed = helper.parking_order.len() as i32;
+    let mut packed = plan.len() as i32;
 
-    for i in (init_num..helper.parking_order.len()).rev() {
+    for i in (init_num..plan.len()).rev() {
         if has_box[i] {
             continue;
         }
-        let until = helper.parking_order[i].until;
+        let until = plan[i].until;
         if until == UNTIL_NONE || until >= packed {
             packed = i as i32;
         }
@@ -259,7 +255,7 @@ pub fn score_parked_boxes(ctx: &LevelContext, board: &Board, helper: &Helper) ->
 
     let mut good_init = 0i32;
     for (i, present) in has_box.iter().take(init_num).enumerate() {
-        if *present || helper.parking_order[i].until < packed {
+        if *present || plan[i].until < packed {
             good_init += 1;
         }
     }
@@ -267,12 +263,14 @@ pub fn score_parked_boxes(ctx: &LevelContext, board: &Board, helper: &Helper) ->
     packed - (init_num as i32 - good_init)
 }
 
-fn mandatory_inits_missing(has_box: &[bool], init_num: usize) -> bool {
-    (0..init_num).any(|i| !has_box[i])
+fn mandatory_inits_missing(has_box: &[bool], plan: &[ParkOrder], init_num: usize) -> bool {
+    (0..init_num).any(|i| plan[i].until == UNTIL_NONE && !has_box[i])
 }
 
-fn get_number_of_mandatory_inits(has_box: &[bool], init_num: usize) -> i32 {
-    (0..init_num).filter(|&i| has_box[i]).count() as i32
+fn get_number_of_mandatory_inits(has_box: &[bool], plan: &[ParkOrder], init_num: usize) -> i32 {
+    (0..init_num)
+        .filter(|&i| plan[i].until == UNTIL_NONE && has_box[i])
+        .count() as i32
 }
 
 fn all_fixed_initials_on_place(ctx: &LevelContext, board: &Board, helper: &Helper) -> bool {
@@ -388,26 +386,37 @@ mod tests {
     }
 
     #[test]
-    fn parked_score_counts_plan_prefix() {
-        let ctx = context("########\n#@ $ . #\n#      #\n# $ .  #\n########\n");
+    fn parked_score_ignores_moved_initials() {
+        let ctx = context("#######\n#@ $ .#\n# $  .#\n#  .  #\n#######\n");
+        let initial = ctx.level.index_at(1, 5).unwrap() as i32;
+        let fixed_init = ctx.level.index_at(2, 5).unwrap() as i32;
+        let last = ctx.level.index_at(3, 4).unwrap() as i32;
         let helper = Helper {
-            // Two final placements; the first is filled.
             parking_order: vec![
                 ParkOrder {
-                    from: -1,
-                    to: ctx.level.index_at(1, 5).unwrap() as i32,
+                    from: -2,
+                    to: initial,
+                    until: 1,
+                },
+                ParkOrder {
+                    from: -2,
+                    to: fixed_init,
                     until: -1,
                 },
                 ParkOrder {
                     from: -1,
-                    to: ctx.level.index_at(3, 5).unwrap() as i32,
+                    to: last,
                     until: -1,
                 },
             ],
             ..Helper::default()
         };
         let mut board = ctx.level.initial;
-        board.or(1, 5, BOX);
-        assert_eq!(score_parked_boxes(&ctx, &board, &helper), 1);
+        board.and_not(1, 3, BOX);
+        board.and_not(2, 2, BOX);
+        board.or(2, 5, BOX);
+        board.or(3, 4, BOX);
+        // The moved init is absent, but only `until == -1` inits are mandatory.
+        assert_eq!(score_parked_boxes(&ctx, &board, &helper), 3);
     }
 }
