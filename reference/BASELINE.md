@@ -692,6 +692,48 @@ replay valid), and Microban 155/155 replays valid.
 7f375283ee491979cfe362c5ac79ceb04ecfd34348db6deeb74a4d047a1710f4 *target/g7/bfs-timings.txt
 ```
 
+## Build-profile follow-up (2026-10-28)
+
+Build-level variants measured with an interleaved, CPU-0-pinned protocol
+(60 s per level, one core; every variant runs once per round). The host was
+slower than on the Gate G7 day, so only the within-run ratios are meaningful.
+
+| Variant | XS 15–16 (mean of 5) | Microban 145–146 (mean of 5) | XS 1–20 (mean of 3) |
+|---|---|---|---|
+| baseline (`thin` LTO, unwind, system allocator) | 4,794 ms | 4,674 ms | 11,998 ms |
+| `panic = "abort"` | 4,491 ms (−6.3%) | 4,574 ms (−2.2%) | 11,048 ms (−7.9%) |
+| mimalloc | 4,623 ms (−3.6%) | 4,442 ms (−5.0%) | 11,653 ms (−2.9%) |
+| `target-cpu=native` | 4,795 ms (0%) | 4,561 ms (−2.4%) | 12,034 ms (+0.3%) |
+
+Second interleaved run for the combination (4 reps for the level pairs, 3 for
+XS 1–20):
+
+| Variant | XS 15–16 | Microban 145–146 | XS 1–20 |
+|---|---|---|---|
+| baseline | 4,497 ms | 4,136 ms | 10,742 ms |
+| `panic = "abort"` | 4,179 ms (−7.1%) | 4,022 ms (−2.8%) | 9,879 ms (−8.0%) |
+| mimalloc | 4,386 ms (−2.5%) | 3,958 ms (−4.3%) | 10,406 ms (−3.1%) |
+| `abort` + mimalloc | 4,063 ms (−9.7%) | 3,840 ms (−7.1%) | 9,699 ms (−9.7%) |
+
+The shipped binary uses `panic = "abort"` plus mimalloc. Against the pre-change
+binary it measured 4,754 → 4,385 ms on XS 15–16 (−7.8%) and 11,718 → 10,649 ms
+on XS 1–20 (−9.1%). Eight-core Microban 1–155 came in at 11,287/12,682 ms
+before and 10,274/12,458 ms after (two interleaved reps).
+
+Rejected: PGO (`-Cprofile-generate` / `-Cprofile-use`, trained on XS 1–20 and
+Microban 1–155) was consistently 3.5–5% slower than baseline (XS 15–16
+4,268/4,301/4,308 vs 4,431/4,433/4,460 ms; XS 1–20 10,675/10,693 vs
+11,236/11,237 ms). Fat LTO showed no gain over thin LTO.
+
+Peak working set for the adopted configuration (XSokoban 16): 201.4 MB vs
+166.3 MB on one core (+21%) and 1,340.2 MB vs 1,294.5 MB with eight cores
+(+3.5%), far below the 1.20× C++ gate.
+
+Verification: 118 unit tests pass in both dev and release profiles; clippy,
+fmt and cargo-deny are clean; Microban 155/155 (22,486 moves / 5,920 pushes)
+and XSokoban 20/20 (18,143 / 5,466) reproduce the baseline totals with 0
+invalid solutions.
+
 ## Still missing
 
 - The 24-hour soak acceptance run has not been executed; the recorded soak is
