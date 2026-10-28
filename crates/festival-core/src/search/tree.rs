@@ -86,6 +86,23 @@ pub struct Tree {
     height: usize,
 }
 
+/// Reserves tree storage without aborting on allocation failure; oversized
+/// searches then report `ResourceExhausted` instead of taking the process down.
+fn try_alloc<T: Clone>(len: usize, value: T) -> Result<Vec<T>> {
+    let mut vec = Vec::new();
+    vec.try_reserve_exact(len)
+        .map_err(|_| SolveError::ResourceExhausted)?;
+    vec.resize(len, value);
+    Ok(vec)
+}
+
+fn try_capacity<T>(cap: usize) -> Result<Vec<T>> {
+    let mut vec = Vec::new();
+    vec.try_reserve_exact(cap)
+        .map_err(|_| SolveError::ResourceExhausted)?;
+    Ok(vec)
+}
+
 impl Tree {
     pub fn new(log_max_nodes: u32, width: usize, height: usize) -> Result<Self> {
         if !(4..=30).contains(&log_max_nodes) || width == 0 || height == 0 {
@@ -102,15 +119,15 @@ impl Tree {
             .ok_or(SolveError::ResourceExhausted)?;
 
         Ok(Self {
-            hash_array: vec![NONE_NODE; hash_size],
+            hash_array: try_alloc(hash_size, NONE_NODE)?,
             mask: hash_size - 1,
-            nodes: Vec::with_capacity(max_nodes),
+            nodes: try_capacity(max_nodes)?,
             max_nodes,
-            expansions: Vec::with_capacity(max_expansions),
+            expansions: try_capacity(max_expansions)?,
             max_expansions,
-            move_hashes: Vec::with_capacity(max_move_hashes),
+            move_hashes: try_capacity(max_move_hashes)?,
             max_move_hashes,
-            boards: vec![0; boards_len],
+            boards: try_alloc(boards_len, 0)?,
             board_stride,
             queues: Vec::new(),
             labels_num: 0,
@@ -1296,5 +1313,18 @@ impl Tree {
         self.replace_in_queue(last);
         helper.perimeter_found = true;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_allocation_reports_resource_exhaustion() {
+        assert!(matches!(
+            try_capacity::<u8>(usize::MAX),
+            Err(SolveError::ResourceExhausted)
+        ));
     }
 }
