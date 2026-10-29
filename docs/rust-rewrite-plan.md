@@ -1,13 +1,13 @@
-# Festival 3.1 → festival-rs：Rust 重写计划
+# Rust 重写计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | Draft v1，待评审 |
-| 编写日期 | 2026-10-27 |
-| 源项目 | Festival 3.1（C++，作者 Yaron Shoham） |
-| 源目录 | `D:\Users\sms\Desktop\Repos\festival` |
-| 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs` |
-| 目标版本 | `festival-rs 1.0`：行为等价移植 |
+| 项目     | 内容                                                                                                                                                                                                |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 文档状态 | Draft v1，待评审                                                                                                                                                                                    |
+| 编写日期 | 2026-10-27                                                                                                                                                                                          |
+| 源项目   | Festival 3.1（C++，作者 Yaron Shoham）                                                                                                                                                              |
+| 源目录   | `D:\Users\sms\Desktop\Repos\festival`                                                                                                                                                               |
+| 目标仓库 | `D:\Users\sms\Desktop\Repos\festival-rs`                                                                                                                                                            |
+| 目标版本 | `festival-rs 1.0`：行为等价移植                                                                                                                                                                     |
 | 当前进展 | Phase 0–7 完成；Phase 6 达到 8 策略与 1/2/4/8 核完整调度；Gate G7：单核 Microban 0.82×、XSokoban 1.07× C++，8 核吞吐 1.76× C++，峰值 RSS 0.18×，600 s soak 无泄漏（24 h soak 未执行）（2026-10-28） |
 
 > 本文既是技术路线图，也是验收契约。每个阶段都有交付物和 Gate；未通过 Gate 不进入下一阶段。
@@ -27,17 +27,17 @@ Festival 是一个高性能 Sokoban（推箱子）求解器，核心是 **FESS�
 
 预计单人全职 **27–36 周（约 6.5–9 个月）**；若两人并行开发，可压缩到 **18–24 周**。里程碑如下：
 
-| 里程碑 | 内容 | 累计周（单人） |
-|---|---|---|
-| M0 | C++ 基准、测试语料、工程脚手架 | 1–2 |
-| M1 | 基础层与静态分析通过差分校验 | 4–6 |
-| M2 | FESS 最小闭环，端到端产出合法解 | 7–10 |
-| M3 | 死锁子系统与 C++ 判定一致 | 12–16 |
-| M4 | packing / 规划 / HF 家族达到策略等价 | 17–23 |
-| M5 | GIRL 与 Dragonfly 等价 | 20–27 |
-| M6 | 8 策略调度与多核完整兼容 | 23–30 |
-| M7 | 性能、稳定性、内存达标 | 26–34 |
-| M8 | 1.0 发布 | 27–36 |
+| 里程碑 | 内容                                 | 累计周（单人） |
+| ------ | ------------------------------------ | -------------- |
+| M0     | C++ 基准、测试语料、工程脚手架       | 1–2            |
+| M1     | 基础层与静态分析通过差分校验         | 4–6            |
+| M2     | FESS 最小闭环，端到端产出合法解      | 7–10           |
+| M3     | 死锁子系统与 C++ 判定一致            | 12–16          |
+| M4     | packing / 规划 / HF 家族达到策略等价 | 17–23          |
+| M5     | GIRL 与 Dragonfly 等价               | 20–27          |
+| M6     | 8 策略调度与多核完整兼容             | 23–30          |
+| M7     | 性能、稳定性、内存达标               | 26–34          |
+| M8     | 1.0 发布                             | 27–36          |
 
 ---
 
@@ -68,16 +68,16 @@ Festival 是一个高性能 Sokoban（推箱子）求解器，核心是 **FESS�
 
 ### 2.3 成功标准（Definition of Done）
 
-| 维度 | 1.0 验收标准 |
-|---|---|
-| 解题正确性 | 所有输出的 LURD 解均可独立回放，最终所有箱子在目标上；非法推数 0 |
-| 解题能力 | 基准关卡集中，C++ 能解出的关卡 Rust 也必须解出（同一机器、同一时间/核数预算） |
-| 解质量 | 总推数（pushes）≤ C++ 基准 102%，总步数（moves）≤ 105%；个体差异需记录 |
-| 耗时 | 单线程 ≤ 1.25× C++；8 线程扩展效率不低于 C++ 的 80% |
-| 内存 | 峰值 RSS ≤ 1.2× C++（相同 `-time`、`-cores`、`-extra_mem`） |
-| 稳定性 | 24 小时压力运行无 panic、无死锁、无内存增长 |
-| 兼容性 | 第 12 节 CLI 参数表和 `solutions.sok` / `times.txt` 语义兼容 |
-| 代码质量 | `cargo fmt --check`、`cargo clippy -D warnings`、测试全绿、无 unsafe |
+| 维度       | 1.0 验收标准                                                                  |
+| ---------- | ----------------------------------------------------------------------------- |
+| 解题正确性 | 所有输出的 LURD 解均可独立回放，最终所有箱子在目标上；非法推数 0              |
+| 解题能力   | 基准关卡集中，C++ 能解出的关卡 Rust 也必须解出（同一机器、同一时间/核数预算） |
+| 解质量     | 总推数（pushes）≤ C++ 基准 102%，总步数（moves）≤ 105%；个体差异需记录        |
+| 耗时       | 单线程 ≤ 1.25× C++；8 线程扩展效率不低于 C++ 的 80%                           |
+| 内存       | 峰值 RSS ≤ 1.2× C++（相同 `-time`、`-cores`、`-extra_mem`）                   |
+| 稳定性     | 24 小时压力运行无 panic、无死锁、无内存增长                                   |
+| 兼容性     | 第 12 节 CLI 参数表和 `solutions.sok` / `times.txt` 语义兼容                  |
+| 代码质量   | `cargo fmt --check`、`cargo clippy -D warnings`、测试全绿、无 unsafe          |
 
 ---
 
@@ -85,19 +85,19 @@ Festival 是一个高性能 Sokoban（推箱子）求解器，核心是 **FESS�
 
 ### 3.1 规模与构建
 
-| 指标 | 数值 |
-|---|---|
-| 实现文件 | 62 个 `.cpp` |
-| 头文件 | 61 个 `.h` |
-| 实现代码 | 22,535 行 |
-| 头文件代码 | 1,305 行 |
-| 合计 | 23,840 行 |
-| 语言风格 | C++ 编译器下的 C 风格过程式代码；结构体 + 全局数组 + 裸指针，几乎无 STL |
-| 构建（README） | `gcc -O3 *.cpp -pthread -DTHREADS`（Windows / mingw64） |
-| 外部资源 | 仅关卡文件；死锁模式内嵌在 `textfile.cpp`，无外部数据文件 |
-| 默认关卡集 | `XSokoban`，从 `./levels/XSokoban.sok` 读取 |
-| 默认每关时限 | 600 秒 |
-| 默认并行 | 自动检测 CPU 与内存，可选择 1/2/4/8 核 |
+| 指标           | 数值                                                                    |
+| -------------- | ----------------------------------------------------------------------- |
+| 实现文件       | 62 个 `.cpp`                                                            |
+| 头文件         | 61 个 `.h`                                                              |
+| 实现代码       | 22,535 行                                                               |
+| 头文件代码     | 1,305 行                                                                |
+| 合计           | 23,840 行                                                               |
+| 语言风格       | C++ 编译器下的 C 风格过程式代码；结构体 + 全局数组 + 裸指针，几乎无 STL |
+| 构建（README） | `gcc -O3 *.cpp -pthread -DTHREADS`（Windows / mingw64）                 |
+| 外部资源       | 仅关卡文件；死锁模式内嵌在 `textfile.cpp`，无外部数据文件               |
+| 默认关卡集     | `XSokoban`，从 `./levels/XSokoban.sok` 读取                             |
+| 默认每关时限   | 600 秒                                                                  |
+| 默认并行       | 自动检测 CPU 与内存，可选择 1/2/4/8 核                                  |
 
 **环境现状**：当前开发机已安装 Rust 1.99.1，但**没有 gcc/g++**。搭建 C++ 基准需要 MSYS2 UCRT64（`mingw-w64-ucrt-x86_64-gcc`）、WSL2（Ubuntu + `g++`）或 CI（Ubuntu）。这是 Phase 0 的第一个阻塞项。
 
@@ -137,52 +137,52 @@ flowchart TD
 
 `solve_with_alg` 中硬编码 8 组策略，反向搜索占 1/3 时间，正向搜索占剩余时间：
 
-| # | 策略 | 反向搜索 | 正向搜索 | 计划阶段 | 说明 |
-|---|---|---|---|---|---|
-| 0 | A | `BASE_SEARCH` | `FORWARD_WITH_BASES` | Phase 4a | 通过 sink square 消除箱子 |
-| 1 | B | `MAX_DIST_SEARCH2` | `HF_SEARCH` | Phase 4b | 距离/HF 特征 |
-| 2 | C | `GIRL_SEARCH` | `GIRL_SEARCH` | Phase 5 | RL / ε-greedy |
-| 3 | D | `HF_SEARCH` | `HF_SEARCH` | Phase 4b | 纯 HF |
-| 4 | E | `BICON_SEARCH` | `HF_SEARCH` | Phase 4b | 双连通特征 |
-| 5 | F | `MAX_DIST_SEARCH` | `HF_SEARCH` | Phase 4b | 最大距离特征 |
-| 6 | G | `REV_SEARCH` | `REV_SEARCH` | Phase 4b | 反向打包 + 正向墙化 |
-| 7 | H | `DRAGONFLY` | `NAIVE_SEARCH` | Phase 5 / 6 | 小关卡快速贪心 |
+| # | 策略 | 反向搜索           | 正向搜索             | 计划阶段    | 说明                      |
+| - | ---- | ------------------ | -------------------- | ----------- | ------------------------- |
+| 0 | A    | `BASE_SEARCH`      | `FORWARD_WITH_BASES` | Phase 4a    | 通过 sink square 消除箱子 |
+| 1 | B    | `MAX_DIST_SEARCH2` | `HF_SEARCH`          | Phase 4b    | 距离/HF 特征              |
+| 2 | C    | `GIRL_SEARCH`      | `GIRL_SEARCH`        | Phase 5     | RL / ε-greedy             |
+| 3 | D    | `HF_SEARCH`        | `HF_SEARCH`          | Phase 4b    | 纯 HF                     |
+| 4 | E    | `BICON_SEARCH`     | `HF_SEARCH`          | Phase 4b    | 双连通特征                |
+| 5 | F    | `MAX_DIST_SEARCH`  | `HF_SEARCH`          | Phase 4b    | 最大距离特征              |
+| 6 | G    | `REV_SEARCH`       | `REV_SEARCH`         | Phase 4b    | 反向打包 + 正向墙化       |
+| 7 | H    | `DRAGONFLY`        | `NAIVE_SEARCH`       | Phase 5 / 6 | 小关卡快速贪心            |
 
 调度规则：
 
-| 核数 | 行为 |
-|---|---|
-| 1 | 顺序执行 8 个策略；第 i 个策略拿到剩余时间 `1/(8-i)` |
-| 2 | 4 轮，每轮并行执行 2 个策略：`(0,1) (2,3) (4,5) (6,7)` |
-| 4 | 2 轮，每轮并行执行 4 个策略：`(0..3) (4..7)` |
-| 8 | 8 个策略同时启动，共享整段剩余时间 |
-| `-alg N` | 强制执行策略 N，占用全部剩余时间（用于调试/测试） |
+| 核数     | 行为                                                   |
+| -------- | ------------------------------------------------------ |
+| 1        | 顺序执行 8 个策略；第 i 个策略拿到剩余时间 `1/(8-i)`   |
+| 2        | 4 轮，每轮并行执行 2 个策略：`(0,1) (2,3) (4,5) (6,7)` |
+| 4        | 2 轮，每轮并行执行 4 个策略：`(0..3) (4..7)`           |
+| 8        | 8 个策略同时启动，共享整段剩余时间                     |
+| `-alg N` | 强制执行策略 N，占用全部剩余时间（用于调试/测试）      |
 
 ### 3.4 SearchMode 清单
 
-| 值 | 名称 | 用途 | 计划阶段 |
-|---|---|---|---|
-| 0 | `NORMAL` | 通用 FESS；也作为内部降级模式 | Phase 2 |
-| 1 | `DEADLOCK_SEARCH` | 死锁区域搜索 | Phase 3 |
-| 2 | `BASE_SEARCH` | 反向后向：以初始箱子位置为 base | Phase 4a |
-| 3 | `K_DIST_SEARCH` | k-距离死锁搜索 | Phase 3 |
-| 4 | `MINI_SEARCH` | 小规模搜索（死锁判定子程序） | Phase 3 |
-| 5 | `FORWARD_WITH_BASES` | 正向策略 A | Phase 4a |
-| 6 | `GIRL_SEARCH` | RL 特征评分 + ε-greedy | Phase 5 |
-| 7 | `REV_SEARCH` | 反向模式（墙化/imagined） | Phase 4b |
-| 8 | `DRAGONFLY` | 优先队列贪心 | Phase 5 |
-| 9 | `WOBBLERS_SEARCH` | wobblers 死锁搜索 | Phase 3 |
-| 10 | `HF_SEARCH` | HF 评分（含 imagined 距离） | Phase 4b |
-| 11 | `ROOMS_DEADLOCK_SEARCH` | 房间死锁搜索 | Phase 3 |
-| 12 | `NAIVE_SEARCH` | 朴素评分（策略 H 正向） | Phase 6 |
-| 13 | `XY_SEARCH` | XY 死锁搜索 | Phase 3 |
-| 14 | `MINI_CORRAL` | 小型 corral 判定 | Phase 3 |
-| 15 | `IGNORE_CORRAL` | 关闭 corral 剪枝的降级模式 | Phase 2/3 |
-| 16 | `BICON_SEARCH` | 双连通评分 | Phase 4b |
-| 17 | `MAX_DIST_SEARCH` | 最大距离评分 | Phase 4b |
-| 18 | `MAX_DIST_SEARCH2` | 最大距离评分（变体） | Phase 4b |
-| 19 | `SNAIL_SEARCH` | Snail 关卡专用评分 | Phase 6 |
-| 20 | `NETLOCK_SEARCH` | Netlock 关卡专用评分 | Phase 6 |
+| 值 | 名称                    | 用途                            | 计划阶段  |
+| -- | ----------------------- | ------------------------------- | --------- |
+| 0  | `NORMAL`                | 通用 FESS；也作为内部降级模式   | Phase 2   |
+| 1  | `DEADLOCK_SEARCH`       | 死锁区域搜索                    | Phase 3   |
+| 2  | `BASE_SEARCH`           | 反向后向：以初始箱子位置为 base | Phase 4a  |
+| 3  | `K_DIST_SEARCH`         | k-距离死锁搜索                  | Phase 3   |
+| 4  | `MINI_SEARCH`           | 小规模搜索（死锁判定子程序）    | Phase 3   |
+| 5  | `FORWARD_WITH_BASES`    | 正向策略 A                      | Phase 4a  |
+| 6  | `GIRL_SEARCH`           | RL 特征评分 + ε-greedy          | Phase 5   |
+| 7  | `REV_SEARCH`            | 反向模式（墙化/imagined）       | Phase 4b  |
+| 8  | `DRAGONFLY`             | 优先队列贪心                    | Phase 5   |
+| 9  | `WOBBLERS_SEARCH`       | wobblers 死锁搜索               | Phase 3   |
+| 10 | `HF_SEARCH`             | HF 评分（含 imagined 距离）     | Phase 4b  |
+| 11 | `ROOMS_DEADLOCK_SEARCH` | 房间死锁搜索                    | Phase 3   |
+| 12 | `NAIVE_SEARCH`          | 朴素评分（策略 H 正向）         | Phase 6   |
+| 13 | `XY_SEARCH`             | XY 死锁搜索                     | Phase 3   |
+| 14 | `MINI_CORRAL`           | 小型 corral 判定                | Phase 3   |
+| 15 | `IGNORE_CORRAL`         | 关闭 corral 剪枝的降级模式      | Phase 2/3 |
+| 16 | `BICON_SEARCH`          | 双连通评分                      | Phase 4b  |
+| 17 | `MAX_DIST_SEARCH`       | 最大距离评分                    | Phase 4b  |
+| 18 | `MAX_DIST_SEARCH2`      | 最大距离评分（变体）            | Phase 4b  |
+| 19 | `SNAIL_SEARCH`          | Snail 关卡专用评分              | Phase 6   |
+| 20 | `NETLOCK_SEARCH`        | Netlock 关卡专用评分            | Phase 6   |
 
 ### 3.5 模块分层
 
@@ -198,24 +198,24 @@ flowchart BT
 
 ### 3.6 关键全局状态
 
-| C++ 全局对象 | 用途 | Rust 归属 |
-|---|---|---|
-| `height`, `width`, `initial_board`, `inner`, `index_num`, 索引映射表 | 关卡几何与静态信息 | `LevelContext`（不可变，按关卡共享） |
-| `distance_from_to`, `bfs_distance_from_to`, `impossible_place` | 推/拉距离矩阵 | `LevelDistances`（不可变） |
-| `rooms_board`, `rooms_num`, `base_graph` | 房间划分与房间连通图 | `LevelAnalysis`（不可变） |
-| `targets_reachable_from`, `blocks_place`, `completely_blocks` | 热点表 | `LevelAnalysis`（不可变） |
-| `patterns`, `pull_patterns` | 静态死锁模式（含旋转/翻转） | `OnceLock<DeadlockPatterns>`（进程级只读） |
-| `forbidden_push_tunnel`, `forbidden_pull_tunnel` | 隧道禁区 | `LevelContext` |
-| `perimeter` | 正/反向搜索之间的前沿哈希表 | `SharedRun` 中的带锁表（C++ 已加锁） |
-| `deadlock_cache` | 死锁判定缓存 | 线程本地缓存或分片锁缓存（见 4.5） |
-| `k_dist` 哈希、stuck patterns | 死锁学习/记忆 | 每关共享 + 锁，或线程本地后合并 |
-| GIRL 距离/权重表、`snail_level_detected` | 关卡级 RL / 特殊关卡检测 | `LevelAnalysis` |
-| `any_core_solved` | 全局取消标志 | `AtomicBool` |
-| `start_time`, `end_time`, `time_limit` | 计时 | `Clock` / `RunConfig` |
-| `global_fail_reason` | 失败原因 | 线程结果聚合，不用共享 `char[]` |
-| 全局统计（`global_total_moves` 等） | 汇总日志 | `RunStats`（主线程汇总） |
-| `dragonfly_nodes`, `dragonfly_roots` | Dragonfly 节点池 | 线程本地 `DragonflySearch` |
-| `global_dir`, `level_set_name`, `output_filename` | 路径与模式 | `RunConfig` |
+| C++ 全局对象                                                         | 用途                        | Rust 归属                                  |
+| -------------------------------------------------------------------- | --------------------------- | ------------------------------------------ |
+| `height`, `width`, `initial_board`, `inner`, `index_num`, 索引映射表 | 关卡几何与静态信息          | `LevelContext`（不可变，按关卡共享）       |
+| `distance_from_to`, `bfs_distance_from_to`, `impossible_place`       | 推/拉距离矩阵               | `LevelDistances`（不可变）                 |
+| `rooms_board`, `rooms_num`, `base_graph`                             | 房间划分与房间连通图        | `LevelAnalysis`（不可变）                  |
+| `targets_reachable_from`, `blocks_place`, `completely_blocks`        | 热点表                      | `LevelAnalysis`（不可变）                  |
+| `patterns`, `pull_patterns`                                          | 静态死锁模式（含旋转/翻转） | `OnceLock<DeadlockPatterns>`（进程级只读） |
+| `forbidden_push_tunnel`, `forbidden_pull_tunnel`                     | 隧道禁区                    | `LevelContext`                             |
+| `perimeter`                                                          | 正/反向搜索之间的前沿哈希表 | `SharedRun` 中的带锁表（C++ 已加锁）       |
+| `deadlock_cache`                                                     | 死锁判定缓存                | 线程本地缓存或分片锁缓存（见 4.5）         |
+| `k_dist` 哈希、stuck patterns                                        | 死锁学习/记忆               | 每关共享 + 锁，或线程本地后合并            |
+| GIRL 距离/权重表、`snail_level_detected`                             | 关卡级 RL / 特殊关卡检测    | `LevelAnalysis`                            |
+| `any_core_solved`                                                    | 全局取消标志                | `AtomicBool`                               |
+| `start_time`, `end_time`, `time_limit`                               | 计时                        | `Clock` / `RunConfig`                      |
+| `global_fail_reason`                                                 | 失败原因                    | 线程结果聚合，不用共享 `char[]`            |
+| 全局统计（`global_total_moves` 等）                                  | 汇总日志                    | `RunStats`（主线程汇总）                   |
+| `dragonfly_nodes`, `dragonfly_roots`                                 | Dragonfly 节点池            | 线程本地 `DragonflySearch`                 |
+| `global_dir`, `level_set_name`, `output_filename`                    | 路径与模式                  | `RunConfig`                                |
 
 ### 3.7 资源画像
 
@@ -244,12 +244,12 @@ flowchart BT
 
 **死代码/未引用代码（不迁移或仅作测试工具）：**
 
-| 文件 | 结论 |
-|---|---|
-| `order.cpp` | `set_order` / `score_using_order` 仅在本文件内出现，未被调用；不迁移 |
-| `lurd.cpp` | `lurd_to_moves` 仅在自身测试函数中使用；可作为测试校验器参考，不进入核心 |
-| `interseting.h` | 无对应 `.cpp`，无引用；忽略 |
-| `margin.h` | 空文件；忽略 |
+| 文件            | 结论                                                                     |
+| --------------- | ------------------------------------------------------------------------ |
+| `order.cpp`     | `set_order` / `score_using_order` 仅在本文件内出现，未被调用；不迁移     |
+| `lurd.cpp`      | `lurd_to_moves` 仅在自身测试函数中使用；可作为测试校验器参考，不进入核心 |
+| `interseting.h` | 无对应 `.cpp`，无引用；忽略                                              |
+| `margin.h`      | 空文件；忽略                                                             |
 
 ---
 
@@ -481,17 +481,17 @@ impl SearchClock {
 
 ### 4.9 依赖选择
 
-| 用途 | 选择 | 说明 |
-|---|---|---|
-| CLI | `clap` 4（derive） | 参数兼容；`--help` 自动生成 |
-| 错误 | `thiserror` | 库层错误类型 |
-| 日志 | `log` + `env_logger` | 替代全局 `verbose` 分散打印；保留数字级别映射 |
-| 线程数 | `std::thread::available_parallelism` | 无需 `num_cpus` |
-| 物理内存 | `sysinfo`（可选 feature） | 仅用于自动核数/预算；也可要求用户显式传参 |
-| 测试 | `proptest`、`insta`（可选） | 属性测试 + golden 快照 |
-| 基准 | `criterion`（微基准）、自研 `festival-bench`（端到端） | 端到端不适合 criterion |
-| 模糊测试 | `cargo-fuzz`（dev 工具） | 解析器、LURD、图搜索 |
-| 序列化 | `serde` + `serde_json`（仅 trace/fixture） | 生产路径不依赖 |
+| 用途     | 选择                                                   | 说明                                          |
+| -------- | ------------------------------------------------------ | --------------------------------------------- |
+| CLI      | `clap` 4（derive）                                     | 参数兼容；`--help` 自动生成                   |
+| 错误     | `thiserror`                                            | 库层错误类型                                  |
+| 日志     | `log` + `env_logger`                                   | 替代全局 `verbose` 分散打印；保留数字级别映射 |
+| 线程数   | `std::thread::available_parallelism`                   | 无需 `num_cpus`                               |
+| 物理内存 | `sysinfo`（可选 feature）                              | 仅用于自动核数/预算；也可要求用户显式传参     |
+| 测试     | `proptest`、`insta`（可选）                            | 属性测试 + golden 快照                        |
+| 基准     | `criterion`（微基准）、自研 `festival-bench`（端到端） | 端到端不适合 criterion                        |
+| 模糊测试 | `cargo-fuzz`（dev 工具）                               | 解析器、LURD、图搜索                          |
+| 序列化   | `serde` + `serde_json`（仅 trace/fixture）             | 生产路径不依赖                                |
 
 原则：核心算法不引入重量级运行时；不引入 async；不引入 Rayon/Tokio。
 
@@ -846,93 +846,93 @@ impl SearchClock {
 
 ### 6.1 基础与 I/O（Phase 1）
 
-| C++ 文件 | 行数 | Rust 目标 | 复杂度 | 备注 |
-|---|---:|---|---|---|
-| `global.cpp` / `global.h` | 88 | `config.rs` / `constants.rs` | ★ | 去掉全局变量，改为配置与常量 |
-| `board.cpp` / `board.h` | 794 | `board/{mod,geometry,hash}.rs` | ★★ | 位标志、inner、玩家云、哈希、反推 |
-| `bfs.cpp` / `bfs.h` | 284 | `bfs.rs` | ★★ | 连通性、分量、目标源 |
-| `distance.cpp` / `distance.h` | 176 | `distance.rs` | ★★ | 推/拉距离矩阵 |
-| `graph.cpp` / `graph.h` | 977 | `graph.rs` | ★★★★ | 核心移动图；先生成 move 再谈搜索 |
-| `moves.cpp` / `moves.h` | 353 | `moves.rs` | ★★★ | 宏推生成、apply、corral 钩子 |
-| `preprocess.cpp` / `preprocess.h` | 197 | `level/preprocess.rs` | ★★ | 顺序敏感 |
-| `io.cpp` / `io.h` | 601 | `io/{sok,render}.rs` | ★★ | 解析/渲染/颜色；跨平台重写 |
-| `textfile.cpp` / `textfile.h` | 209 | `deadlock/pattern_data.rs` | ★ | 内嵌模式转 const |
-| `util.cpp` / `util.h` | 258 | `util.rs` | ★ | 时间、核数、文本；去掉 getch |
-| `lurd.cpp` | 87 | `io/lurd.rs` + 测试 | ★ | 仅作校验/工具 |
-| `order.cpp` | 98 | 不迁移 | — | 死代码 |
-| `interseting.h` / `margin.h` | 0 | 忽略 | — | 空/无实现 |
+| C++ 文件                          | 行数 | Rust 目标                      | 复杂度 | 备注                              |
+| --------------------------------- | ---: | ------------------------------ | ------ | --------------------------------- |
+| `global.cpp` / `global.h`         |   88 | `config.rs` / `constants.rs`   | ★      | 去掉全局变量，改为配置与常量      |
+| `board.cpp` / `board.h`           |  794 | `board/{mod,geometry,hash}.rs` | ★★     | 位标志、inner、玩家云、哈希、反推 |
+| `bfs.cpp` / `bfs.h`               |  284 | `bfs.rs`                       | ★★     | 连通性、分量、目标源              |
+| `distance.cpp` / `distance.h`     |  176 | `distance.rs`                  | ★★     | 推/拉距离矩阵                     |
+| `graph.cpp` / `graph.h`           |  977 | `graph.rs`                     | ★★★★   | 核心移动图；先生成 move 再谈搜索  |
+| `moves.cpp` / `moves.h`           |  353 | `moves.rs`                     | ★★★    | 宏推生成、apply、corral 钩子      |
+| `preprocess.cpp` / `preprocess.h` |  197 | `level/preprocess.rs`          | ★★     | 顺序敏感                          |
+| `io.cpp` / `io.h`                 |  601 | `io/{sok,render}.rs`           | ★★     | 解析/渲染/颜色；跨平台重写        |
+| `textfile.cpp` / `textfile.h`     |  209 | `deadlock/pattern_data.rs`     | ★      | 内嵌模式转 const                  |
+| `util.cpp` / `util.h`             |  258 | `util.rs`                      | ★      | 时间、核数、文本；去掉 getch      |
+| `lurd.cpp`                        |   87 | `io/lurd.rs` + 测试            | ★      | 仅作校验/工具                     |
+| `order.cpp`                       |   98 | 不迁移                         | —      | 死代码                            |
+| `interseting.h` / `margin.h`      |    0 | 忽略                           | —      | 空/无实现                         |
 
 ### 6.2 静态分析与预处理（Phase 1）
 
-| C++ 文件 | 行数 | Rust 目标 | 复杂度 | 备注 |
-|---|---:|---|---|---|
-| `rooms.cpp` / `rooms.h` | 285 | `analysis/rooms.rs` | ★★★ | 房间划分与房间图 |
-| `hotspot.cpp` / `hotspot.h` | 197 | `analysis/hotspot.rs` | ★★★ | 双重阻断表；注意初始化耗时中止 |
-| `holes.cpp` / `holes.h` | 107 | `analysis/holes.rs` | ★★ | target holes / semi holes |
-| `fixed_boxes.cpp` / `fixed_boxes.h` | 299 | `deadlock/fixed.rs` | ★★★ | 冻结箱、斜线、不可动箱 |
-| `diags.cpp` / `diags.h` | 264 | `deadlock/diags.rs` | ★★★ | 对角死锁 |
-| `biconnect.cpp` / `biconnect.h` | 114 | `analysis/biconnect.rs` | ★★ | 割点/双连通评分 |
-| `mpdb2.cpp` / `mpdb2.h` | 283 | `deadlock/mpdb2.rs` | ★★★ | 双箱模式库 |
-| `envelope.cpp` / `envelope.h` | 335 | `analysis/envelope.rs` | ★★★ | 预处理阶段固定箱 |
-| `match_distance.cpp` / `match_distance.h` | 302 | `analysis/match_distance.rs` | ★★★ | 匹配距离、imagined 距离 |
-| `hungarian.cpp` / `hungarian.h` | 589 | `deadlock/hungarian.rs` | ★★★★ | 带缓存的匈牙利算法 |
+| C++ 文件                                  | 行数 | Rust 目标                    | 复杂度 | 备注                           |
+| ----------------------------------------- | ---: | ---------------------------- | ------ | ------------------------------ |
+| `rooms.cpp` / `rooms.h`                   |  285 | `analysis/rooms.rs`          | ★★★    | 房间划分与房间图               |
+| `hotspot.cpp` / `hotspot.h`               |  197 | `analysis/hotspot.rs`        | ★★★    | 双重阻断表；注意初始化耗时中止 |
+| `holes.cpp` / `holes.h`                   |  107 | `analysis/holes.rs`          | ★★     | target holes / semi holes      |
+| `fixed_boxes.cpp` / `fixed_boxes.h`       |  299 | `deadlock/fixed.rs`          | ★★★    | 冻结箱、斜线、不可动箱         |
+| `diags.cpp` / `diags.h`                   |  264 | `deadlock/diags.rs`          | ★★★    | 对角死锁                       |
+| `biconnect.cpp` / `biconnect.h`           |  114 | `analysis/biconnect.rs`      | ★★     | 割点/双连通评分                |
+| `mpdb2.cpp` / `mpdb2.h`                   |  283 | `deadlock/mpdb2.rs`          | ★★★    | 双箱模式库                     |
+| `envelope.cpp` / `envelope.h`             |  335 | `analysis/envelope.rs`       | ★★★    | 预处理阶段固定箱               |
+| `match_distance.cpp` / `match_distance.h` |  302 | `analysis/match_distance.rs` | ★★★    | 匹配距离、imagined 距离        |
+| `hungarian.cpp` / `hungarian.h`           |  589 | `deadlock/hungarian.rs`      | ★★★★   | 带缓存的匈牙利算法             |
 
 ### 6.3 死锁子系统（Phase 3）
 
-| C++ 文件 | 行数 | Rust 目标 | 复杂度 | 备注 |
-|---|---:|---|---|---|
-| `deadlock.cpp` / `deadlock.h` | 1290 | `deadlock/{patterns,static_checks,tunnel}.rs` | ★★★★★ | 模式加载/旋转、2×2/3×3、inefficient、kill |
-| `deadlock_utils.cpp` / `deadlock_utils.h` | 361 | `deadlock/zone.rs` | ★★★ | deadlock zone |
-| `advanced_deadlock.cpp` | 510 | `deadlock/advanced.rs` | ★★★★★ | 匹配死锁、pull 消除、反向可玩性 |
-| `corral.cpp` / `corral.h` | 588 | `deadlock/corral.rs` | ★★★★ | corral 检测与 π-corral |
-| `corral_deadlock.cpp` | 802 | `deadlock/corral_search.rs` | ★★★★★ | 最深的一层递归搜索 |
-| `k_dist_deadlock.cpp` | 576 | `deadlock/k_dist.rs` | ★★★★ | k-距离哈希与搜索 |
-| `rooms_deadlock.cpp` | 315 | `deadlock/rooms.rs` | ★★★ | 房间死锁 |
-| `wobblers.cpp` / `wobblers.h` | 403 | `deadlock/wobblers.rs` | ★★★★ | wobblers 搜索 |
-| `xy_deadlock.cpp` | 324 | `deadlock/xy.rs` | ★★★ | XY 死锁 |
-| `cycle_deadlock.cpp` | 245 | `deadlock/cycle.rs` | ★★★ | 树内环检测 |
-| `stuck.cpp` / `stuck.h` | 289 | `deadlock/learned.rs` | ★★★★ | 运行时学习模式，需同步 |
-| `mini_search.cpp` | 148 | `deadlock/mini.rs` | ★★★ | 小规模可行性搜索 |
-| `deadlock_cache.cpp` | 205 | `deadlock/cache.rs` | ★★ | 命中缓存；并发策略见 4.5 |
+| C++ 文件                                  | 行数 | Rust 目标                                     | 复杂度 | 备注                                      |
+| ----------------------------------------- | ---: | --------------------------------------------- | ------ | ----------------------------------------- |
+| `deadlock.cpp` / `deadlock.h`             | 1290 | `deadlock/{patterns,static_checks,tunnel}.rs` | ★★★★★  | 模式加载/旋转、2×2/3×3、inefficient、kill |
+| `deadlock_utils.cpp` / `deadlock_utils.h` |  361 | `deadlock/zone.rs`                            | ★★★    | deadlock zone                             |
+| `advanced_deadlock.cpp`                   |  510 | `deadlock/advanced.rs`                        | ★★★★★  | 匹配死锁、pull 消除、反向可玩性           |
+| `corral.cpp` / `corral.h`                 |  588 | `deadlock/corral.rs`                          | ★★★★   | corral 检测与 π-corral                    |
+| `corral_deadlock.cpp`                     |  802 | `deadlock/corral_search.rs`                   | ★★★★★  | 最深的一层递归搜索                        |
+| `k_dist_deadlock.cpp`                     |  576 | `deadlock/k_dist.rs`                          | ★★★★   | k-距离哈希与搜索                          |
+| `rooms_deadlock.cpp`                      |  315 | `deadlock/rooms.rs`                           | ★★★    | 房间死锁                                  |
+| `wobblers.cpp` / `wobblers.h`             |  403 | `deadlock/wobblers.rs`                        | ★★★★   | wobblers 搜索                             |
+| `xy_deadlock.cpp`                         |  324 | `deadlock/xy.rs`                              | ★★★    | XY 死锁                                   |
+| `cycle_deadlock.cpp`                      |  245 | `deadlock/cycle.rs`                           | ★★★    | 树内环检测                                |
+| `stuck.cpp` / `stuck.h`                   |  289 | `deadlock/learned.rs`                         | ★★★★   | 运行时学习模式，需同步                    |
+| `mini_search.cpp`                         |  148 | `deadlock/mini.rs`                            | ★★★    | 小规模可行性搜索                          |
+| `deadlock_cache.cpp`                      |  205 | `deadlock/cache.rs`                           | ★★     | 命中缓存；并发策略见 4.5                  |
 
 ### 6.4 搜索、规划与评分（Phase 2–6）
 
-| C++ 文件 | 行数 | Rust 目标 | 复杂度 | 备注 |
-|---|---:|---|---|---|
-| `tree.cpp` / `tree.h` | 1034 | `search/tree.rs` | ★★★★★ | 索引化重写；最关键的架构点 |
-| `queue.cpp` / `queue.h` | 198 | `search/queue.rs` | ★★ | 自定义索引堆 |
-| `request.cpp` / `request.h` | 215 | `search/features.rs` | ★★★ | 特征单元格与 label |
-| `advisors.cpp` / `advisors.h` | 229 | `search/advisors.rs` | ★★★ | 多 advisor 选择 |
-| `engine.cpp` / `engine.h` | 335 | `search/fess.rs` | ★★★★ | FESS 主循环 |
-| `packing_search.cpp` | 405 | `search/packing.rs` | ★★★★ | 反向多根搜索 |
-| `positions.cpp` / `positions.h` | 658 | `search/positions.rs` | ★★★★ | 死锁搜索专用位置树 |
-| `hf_search.cpp` / `hf_search.h` | 402 | `search/hf.rs` | ★★★★ | HF/REV/BICON/MAX_DIST 评分 |
-| `girl.cpp` / `girl.h` | 246 | `search/girl.rs` | ★★★★ | RL 特征与值 |
-| `greedy.cpp` / `greedy.h` | 255 | `search/greedy.rs` | ★★★★ | ε-greedy 树下降 |
-| `dragonfly.cpp` / `dragonfly.h` | 477 | `search/dragonfly.rs` | ★★★★ | 贪心优先队列 |
-| `dragonfly_queue.cpp` | 163 | `search/dragonfly.rs` | ★★ | 可合并 |
-| `naive.cpp` | 69 | `search/naive.rs` | ★★ | 朴素评分 |
-| `max_dist.cpp` | 31 | `search/max_dist.rs` | ★★ | 最大距离节点数据 |
-| `snail.cpp` / `snail.h` | 597 | `search/snail.rs` | ★★★★ | Snail/Netlock 检测与评分 |
-| `perimeter.cpp` / `perimeter.h` | 452 | `search/perimeter.rs` | ★★★ | 正反向前沿；跨线程锁 |
-| `opener.cpp` / `opener.h` | 169 | `search/opener.rs` | ★★★ | 开箱/探索 advisor |
-| `score.cpp` / `score.h` | 327 | `search/score.rs` | ★★★★ | 所有模式的评分聚合 |
-| `helper.cpp` / `helper.h` | 46 | `solver/context.rs` | ★★ | `Helper` 并入线程上下文 |
-| `park_order.cpp` / `park_order.h` | 523 | `planning/park_order.rs` | ★★★★ | 停车顺序 |
-| `oop.cpp` / `oop.h` | 285 | `planning/oop.rs` | ★★★ | out-of-plan |
-| `imagine.cpp` / `imagine.h` | 236 | `planning/imagine.rs` | ★★★ | imagined board |
-| `overlap.cpp` / `overlap.h` | 64 | `planning/overlap.rs` | ★★ | 重叠评分 |
-| `heuristics.cpp` / `heuristics.h` | 588 | `planning/heuristics.rs` | ★★★★ | base matching / sink squares |
+| C++ 文件                          | 行数 | Rust 目标                | 复杂度 | 备注                         |
+| --------------------------------- | ---: | ------------------------ | ------ | ---------------------------- |
+| `tree.cpp` / `tree.h`             | 1034 | `search/tree.rs`         | ★★★★★  | 索引化重写；最关键的架构点   |
+| `queue.cpp` / `queue.h`           |  198 | `search/queue.rs`        | ★★     | 自定义索引堆                 |
+| `request.cpp` / `request.h`       |  215 | `search/features.rs`     | ★★★    | 特征单元格与 label           |
+| `advisors.cpp` / `advisors.h`     |  229 | `search/advisors.rs`     | ★★★    | 多 advisor 选择              |
+| `engine.cpp` / `engine.h`         |  335 | `search/fess.rs`         | ★★★★   | FESS 主循环                  |
+| `packing_search.cpp`              |  405 | `search/packing.rs`      | ★★★★   | 反向多根搜索                 |
+| `positions.cpp` / `positions.h`   |  658 | `search/positions.rs`    | ★★★★   | 死锁搜索专用位置树           |
+| `hf_search.cpp` / `hf_search.h`   |  402 | `search/hf.rs`           | ★★★★   | HF/REV/BICON/MAX_DIST 评分   |
+| `girl.cpp` / `girl.h`             |  246 | `search/girl.rs`         | ★★★★   | RL 特征与值                  |
+| `greedy.cpp` / `greedy.h`         |  255 | `search/greedy.rs`       | ★★★★   | ε-greedy 树下降              |
+| `dragonfly.cpp` / `dragonfly.h`   |  477 | `search/dragonfly.rs`    | ★★★★   | 贪心优先队列                 |
+| `dragonfly_queue.cpp`             |  163 | `search/dragonfly.rs`    | ★★     | 可合并                       |
+| `naive.cpp`                       |   69 | `search/naive.rs`        | ★★     | 朴素评分                     |
+| `max_dist.cpp`                    |   31 | `search/max_dist.rs`     | ★★     | 最大距离节点数据             |
+| `snail.cpp` / `snail.h`           |  597 | `search/snail.rs`        | ★★★★   | Snail/Netlock 检测与评分     |
+| `perimeter.cpp` / `perimeter.h`   |  452 | `search/perimeter.rs`    | ★★★    | 正反向前沿；跨线程锁         |
+| `opener.cpp` / `opener.h`         |  169 | `search/opener.rs`       | ★★★    | 开箱/探索 advisor            |
+| `score.cpp` / `score.h`           |  327 | `search/score.rs`        | ★★★★   | 所有模式的评分聚合           |
+| `helper.cpp` / `helper.h`         |   46 | `solver/context.rs`      | ★★     | `Helper` 并入线程上下文      |
+| `park_order.cpp` / `park_order.h` |  523 | `planning/park_order.rs` | ★★★★   | 停车顺序                     |
+| `oop.cpp` / `oop.h`               |  285 | `planning/oop.rs`        | ★★★    | out-of-plan                  |
+| `imagine.cpp` / `imagine.h`       |  236 | `planning/imagine.rs`    | ★★★    | imagined board               |
+| `overlap.cpp` / `overlap.h`       |   64 | `planning/overlap.rs`    | ★★     | 重叠评分                     |
+| `heuristics.cpp` / `heuristics.h` |  588 | `planning/heuristics.rs` | ★★★★   | base matching / sink squares |
 
 ### 6.5 编排、解输出与诊断
 
-| C++ 文件 | 行数 | Rust 目标 | 复杂度 | 备注 |
-|---|---:|---|---|---|
-| `sokoban_solver.cpp` | 663 | `solver/{mod,strategy,schedule}.rs` + `festival-cli` | ★★★★ | main、策略表、时间控制 |
-| `sol.cpp` / `sol.h` | 521 | `io/{solution,stats}.rs` | ★★★ | 解路径、LURD、日志、统计 |
-| `debug.cpp` / `debug.h` | 331 | `diagnostics.rs` + `search/trace.rs` | ★★ | 进度/调试/trace |
-| `global.cpp` | 88 | 已在 6.1 | ★ | — |
-| `textfile.cpp` | 209 | 已在 6.1 | ★ | — |
+| C++ 文件                | 行数 | Rust 目标                                            | 复杂度 | 备注                     |
+| ----------------------- | ---: | ---------------------------------------------------- | ------ | ------------------------ |
+| `sokoban_solver.cpp`    |  663 | `solver/{mod,strategy,schedule}.rs` + `festival-cli` | ★★★★   | main、策略表、时间控制   |
+| `sol.cpp` / `sol.h`     |  521 | `io/{solution,stats}.rs`                             | ★★★    | 解路径、LURD、日志、统计 |
+| `debug.cpp` / `debug.h` |  331 | `diagnostics.rs` + `search/trace.rs`                 | ★★     | 进度/调试/trace          |
+| `global.cpp`            |   88 | 已在 6.1                                             | ★      | —                        |
+| `textfile.cpp`          |  209 | 已在 6.1                                             | ★      | —                        |
 
 **总计**：与源项目 62 个 `.cpp` 一一对应（死代码除外）；每个 Rust 模块在文件头保留原始版权说明与“Derived from Festival 3.1”声明。
 
@@ -942,16 +942,16 @@ impl SearchClock {
 
 ### 7.1 测试金字塔
 
-| 层级 | 内容 | 工具 | 运行频率 |
-|---|---|---|---|
-| 单元测试 | 每个模块的边界条件、哨兵值、已知小例 | Rust `#[test]` | 每次提交 |
-| 属性测试 | `apply_move` 不变量、哈希稳定性、LURD 回放、解析 round-trip | `proptest` | 每次提交 |
-| Golden 测试 | 预处理盘面、距离矩阵、房间、热点、模式表 | `insta` / JSON fixture | 每次提交 |
-| 差分测试 | 与 C++ `refcheck` 逐值对比 | `festival-bench` + scripts | PR 抽样 / nightly 全量 |
-| 端到端 | 关卡集求解 + 解校验 | integration test | PR 冒烟 / nightly 全量 |
-| 模糊测试 | 解析器、LURD、图搜索 | `cargo-fuzz` | nightly |
-| 并发测试 | 多核取消、缓存锁、perimeter | TSan / loom 子集 | nightly |
-| 性能测试 | 时间、RSS、扩展数 | `festival-bench` + hyperfine | 每周 / 版本前 |
+| 层级        | 内容                                                        | 工具                         | 运行频率               |
+| ----------- | ----------------------------------------------------------- | ---------------------------- | ---------------------- |
+| 单元测试    | 每个模块的边界条件、哨兵值、已知小例                        | Rust `#[test]`               | 每次提交               |
+| 属性测试    | `apply_move` 不变量、哈希稳定性、LURD 回放、解析 round-trip | `proptest`                   | 每次提交               |
+| Golden 测试 | 预处理盘面、距离矩阵、房间、热点、模式表                    | `insta` / JSON fixture       | 每次提交               |
+| 差分测试    | 与 C++ `refcheck` 逐值对比                                  | `festival-bench` + scripts   | PR 抽样 / nightly 全量 |
+| 端到端      | 关卡集求解 + 解校验                                         | integration test             | PR 冒烟 / nightly 全量 |
+| 模糊测试    | 解析器、LURD、图搜索                                        | `cargo-fuzz`                 | nightly                |
+| 并发测试    | 多核取消、缓存锁、perimeter                                 | TSan / loom 子集             | nightly                |
+| 性能测试    | 时间、RSS、扩展数                                           | `festival-bench` + hyperfine | 每周 / 版本前          |
 
 ### 7.2 差分测试工作流
 
@@ -974,29 +974,29 @@ impl SearchClock {
 
 ### 7.3 基准语料
 
-| 语料 | 规模 | 用途 | 许可注意 |
-|---|---|---|---|
-| 自建 smoke | 12 关 | PR 必跑 | 自有，无问题 |
-| Microban I | 155 关 | 核心回归；小关卡快速反馈 | 免费软件，需署名 David W. Skinner |
-| Microban II | 155 关 | 中等难度回归 | 同上 |
-| XSokoban | 90 关 | 原始基准；策略 A/B 对照 | 需确认关卡版权/分发方式 |
-| SokHard | 90 关 | 高难度；corral/死锁压力 | 需确认 |
-| Sasquatch I–VII | 大量 | 大规模稳定性 | 需确认 |
-| Grigr2001/2002 | 大量 | 大关卡/内存压力 | 需确认 |
-| Sven / Yoshio / Aymeric | 多套 | 策略多样性 | 需确认 |
+| 语料                    | 规模   | 用途                     | 许可注意                          |
+| ----------------------- | ------ | ------------------------ | --------------------------------- |
+| 自建 smoke              | 12 关  | PR 必跑                  | 自有，无问题                      |
+| Microban I              | 155 关 | 核心回归；小关卡快速反馈 | 免费软件，需署名 David W. Skinner |
+| Microban II             | 155 关 | 中等难度回归             | 同上                              |
+| XSokoban                | 90 关  | 原始基准；策略 A/B 对照  | 需确认关卡版权/分发方式           |
+| SokHard                 | 90 关  | 高难度；corral/死锁压力  | 需确认                            |
+| Sasquatch I–VII         | 大量   | 大规模稳定性             | 需确认                            |
+| Grigr2001/2002          | 大量   | 大关卡/内存压力          | 需确认                            |
+| Sven / Yoshio / Aymeric | 多套   | 策略多样性               | 需确认                            |
 
 **CI 策略**：PR 跑 smoke + Microban 前 40 关 + XSokoban 前 20 关（`-time 60 -cores 1`）；nightly 跑完整集与多核；每周跑一次性能基准。
 
 ### 7.4 指标与门槛
 
-| 指标 | 说明 | Phase 2 | Phase 4 | Phase 6 | Phase 7/1.0 |
-|---|---|---|---|---|---|
-| 解题率 | 同预算下 solved/total | 不设高门槛 | ≥ C++ 90% | ≥ C++ 99% | ≥ C++ 100% |
-| 解合法性 | LURD 校验通过率 | 100% | 100% | 100% | 100% |
-| 总推数 | 全部关卡 pushes 总和 | 记录 | ≤ C++ 110% | ≤ C++ 105% | ≤ C++ 102% |
-| 单线程耗时 | 同关卡集总时间 | 不设 | ≤ C++ 1.5× | ≤ C++ 1.3× | ≤ C++ 1.25× |
-| 峰值内存 | RSS | 记录 | ≤ C++ 1.3× | ≤ C++ 1.25× | ≤ C++ 1.2× |
-| 8 线程扩展 | 相对 1 线程加速 | — | — | 记录 | ≥ C++ 80% |
+| 指标       | 说明                  | Phase 2    | Phase 4    | Phase 6     | Phase 7/1.0 |
+| ---------- | --------------------- | ---------- | ---------- | ----------- | ----------- |
+| 解题率     | 同预算下 solved/total | 不设高门槛 | ≥ C++ 90%  | ≥ C++ 99%   | ≥ C++ 100%  |
+| 解合法性   | LURD 校验通过率       | 100%       | 100%       | 100%        | 100%        |
+| 总推数     | 全部关卡 pushes 总和  | 记录       | ≤ C++ 110% | ≤ C++ 105%  | ≤ C++ 102%  |
+| 单线程耗时 | 同关卡集总时间        | 不设       | ≤ C++ 1.5× | ≤ C++ 1.3×  | ≤ C++ 1.25× |
+| 峰值内存   | RSS                   | 记录       | ≤ C++ 1.3× | ≤ C++ 1.25× | ≤ C++ 1.2×  |
+| 8 线程扩展 | 相对 1 线程加速       | —          | —          | 记录        | ≥ C++ 80%   |
 
 ### 7.5 CI 流水线
 
@@ -1020,17 +1020,17 @@ jobs:
 
 假设：1 名熟悉 Rust、搜索算法与性能调优的工程师，全职投入；C++ 基准与语料在 Phase 0 就绪；不包含需求反复。
 
-| 阶段 | 工期（周） | 累计（周） | 关键交付 |
-|---|---:|---:|---|
-| Phase 0 | 1–2 | 1–2 | 基准、语料、脚手架 |
-| Phase 1 | 3–4 | 4–6 | 基础层 + 静态分析 |
-| Phase 2 | 3–4 | 7–10 | FESS 最小闭环 |
-| Phase 3 | 5–6 | 12–16 | 死锁子系统 |
-| Phase 4 | 5–7 | 17–23 | packing/规划/HF 家族 |
-| Phase 5 | 3–4 | 20–27 | GIRL + Dragonfly |
-| Phase 6 | 3–4 | 23–30 | 完整调度/多核 |
-| Phase 7 | 3–4 | 26–34 | 性能/稳定性 |
-| Phase 8 | 1–2 | 27–36 | 1.0 发布 |
+| 阶段    | 工期（周） | 累计（周） | 关键交付             |
+| ------- | ---------: | ---------: | -------------------- |
+| Phase 0 |        1–2 |        1–2 | 基准、语料、脚手架   |
+| Phase 1 |        3–4 |        4–6 | 基础层 + 静态分析    |
+| Phase 2 |        3–4 |       7–10 | FESS 最小闭环        |
+| Phase 3 |        5–6 |      12–16 | 死锁子系统           |
+| Phase 4 |        5–7 |      17–23 | packing/规划/HF 家族 |
+| Phase 5 |        3–4 |      20–27 | GIRL + Dragonfly     |
+| Phase 6 |        3–4 |      23–30 | 完整调度/多核        |
+| Phase 7 |        3–4 |      26–34 | 性能/稳定性          |
+| Phase 8 |        1–2 |      27–36 | 1.0 发布             |
 
 **并行建议（2 人）**
 
@@ -1043,20 +1043,20 @@ jobs:
 
 ## 9. 风险登记表
 
-| ID | 风险 | 影响 | 概率 | 缓解措施 |
-|---|---|---|---|---|
-| R1 | 全局状态耦合导致移植偏差 | 搜索行为退化、难定位 | 高 | 上下文模型、逐模块差分、trace 分叉定位 |
-| R2 | 死锁子系统语义复杂 | 解题率下降、误判 | 高 | 纯函数版本先行、缓存/学习可关闭、10 万盘面差分 |
-| R3 | Rust 安全边界检查导致性能下降 | 耗时超标 | 中 | 数据导向设计、arena、热点 profile；必要时隔离 unsafe |
-| R4 | 树/队列索引化重构引入别名错误 | 崩溃/错误结果 | 中 | 不变量测试、Miri、trace 对比、分阶段替换 |
-| R5 | 多核共享缓存语义差异 | 结果偏移、数据竞争 | 中 | 线程本地化优先、锁分片、TSan、`--cores 1` 基准 |
-| R6 | 时间粒度/时钟差异 | 解题集合偏差 | 中 | 固定扩展数测试模式；日志秒级对齐 |
-| R7 | 缺少关卡集/许可不明 | 无法建立基准 | 中 | 自建 smoke + 下载脚本 + 许可确认；不擅自 vendoring |
-| R8 | C++ 平台依赖导致基准难构建 | Phase 0 阻塞 | 中 | MSYS2/WSL/CI 三选一；记录可复现构建 |
-| R9 | 浮点运算顺序差异 | GIRL/HF 评分偏差 | 低-中 | 保持 f32/f64 与运算顺序；逐值对比 |
-| R10 | 大内存导致 OOM/崩溃 | 稳定性差 | 中 | 预算、`try_reserve`、可配置树大小、内存监控 |
-| R11 | 范围蔓延（顺手改进算法） | 延期、无法验收 | 中 | 1.0 冻结算法；改进进入 v1.1 backlog |
-| R12 | 许可/署名处理不当 | 发布风险 | 低 | 保留版权头、NOTICE、发布前法务确认 |
+| ID  | 风险                          | 影响                 | 概率  | 缓解措施                                             |
+| --- | ----------------------------- | -------------------- | ----- | ---------------------------------------------------- |
+| R1  | 全局状态耦合导致移植偏差      | 搜索行为退化、难定位 | 高    | 上下文模型、逐模块差分、trace 分叉定位               |
+| R2  | 死锁子系统语义复杂            | 解题率下降、误判     | 高    | 纯函数版本先行、缓存/学习可关闭、10 万盘面差分       |
+| R3  | Rust 安全边界检查导致性能下降 | 耗时超标             | 中    | 数据导向设计、arena、热点 profile；必要时隔离 unsafe |
+| R4  | 树/队列索引化重构引入别名错误 | 崩溃/错误结果        | 中    | 不变量测试、Miri、trace 对比、分阶段替换             |
+| R5  | 多核共享缓存语义差异          | 结果偏移、数据竞争   | 中    | 线程本地化优先、锁分片、TSan、`--cores 1` 基准       |
+| R6  | 时间粒度/时钟差异             | 解题集合偏差         | 中    | 固定扩展数测试模式；日志秒级对齐                     |
+| R7  | 缺少关卡集/许可不明           | 无法建立基准         | 中    | 自建 smoke + 下载脚本 + 许可确认；不擅自 vendoring   |
+| R8  | C++ 平台依赖导致基准难构建    | Phase 0 阻塞         | 中    | MSYS2/WSL/CI 三选一；记录可复现构建                  |
+| R9  | 浮点运算顺序差异              | GIRL/HF 评分偏差     | 低-中 | 保持 f32/f64 与运算顺序；逐值对比                    |
+| R10 | 大内存导致 OOM/崩溃           | 稳定性差             | 中    | 预算、`try_reserve`、可配置树大小、内存监控          |
+| R11 | 范围蔓延（顺手改进算法）      | 延期、无法验收       | 中    | 1.0 冻结算法；改进进入 v1.1 backlog                  |
+| R12 | 许可/署名处理不当             | 发布风险             | 低    | 保留版权头、NOTICE、发布前法务确认                   |
 
 ---
 
@@ -1064,16 +1064,16 @@ jobs:
 
 以下决策若未确认，按“推荐默认”执行：
 
-| # | 问题 | 推荐默认 |
-|---|---|---|
-| D1 | 1.0 是否要求完整 8 策略与全部死锁检测？ | 是。按本计划执行；可先交付 MVP，但 1.0 必须完整 |
-| D2 | 是否 vendor C++ 源码到 `reference/`？ | 默认不 vendor，使用外部路径 + 构建脚本；需要离线/可复现时再快照并保留版权 |
-| D3 | 是否允许性能热点使用 `unsafe`？ | 默认禁止；Phase 7 若确有收益，隔离到 `perf` 模块并评审 |
-| D4 | 是否保持 CLI 与 `solutions.sok` 格式完全兼容？ | 是；新增参数只能追加，不能改变默认行为 |
-| D5 | 关卡集是否随仓库分发？ | 仅自建 smoke；外部集用脚本下载并注明许可 |
-| D6 | 支持平台优先级？ | Windows 优先（原项目主场），Linux 同等，macOS 尽力 |
-| D7 | 是否允许在 1.0 前改进算法？ | 不允许；只做等价移植与性能优化 |
-| D8 | 项目许可证？ | 待定；先完整保留 Festival 版权与署名，不擅自改成 MIT/Apache |
+| #  | 问题                                           | 推荐默认                                                                  |
+| -- | ---------------------------------------------- | ------------------------------------------------------------------------- |
+| D1 | 1.0 是否要求完整 8 策略与全部死锁检测？        | 是。按本计划执行；可先交付 MVP，但 1.0 必须完整                           |
+| D2 | 是否 vendor C++ 源码到 `reference/`？          | 默认不 vendor，使用外部路径 + 构建脚本；需要离线/可复现时再快照并保留版权 |
+| D3 | 是否允许性能热点使用 `unsafe`？                | 默认禁止；Phase 7 若确有收益，隔离到 `perf` 模块并评审                    |
+| D4 | 是否保持 CLI 与 `solutions.sok` 格式完全兼容？ | 是；新增参数只能追加，不能改变默认行为                                    |
+| D5 | 关卡集是否随仓库分发？                         | 仅自建 smoke；外部集用脚本下载并注明许可                                  |
+| D6 | 支持平台优先级？                               | Windows 优先（原项目主场），Linux 同等，macOS 尽力                        |
+| D7 | 是否允许在 1.0 前改进算法？                    | 不允许；只做等价移植与性能优化                                            |
+| D8 | 项目许可证？                                   | 待定；先完整保留 Festival 版权与署名，不擅自改成 MIT/Apache               |
 
 ---
 
@@ -1086,10 +1086,12 @@ Festival 源码头部声明：
 因此：
 
 1. 所有从 C++ 移植的 Rust 文件保留原始版权头，并增加：
+
    ```rust
    // Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
    // Rust port: festival-rs contributors.
    ```
+
 2. 仓库根目录提供 `NOTICE` / `CREDITS`，说明程序来源、作者与重写关系。
 3. 不在未确认的情况下把衍生代码整体声明为 MIT/Apache-2.0；先保留“All rights reserved / 待定”并征询原作者或法律意见。
 4. 外部关卡集、死锁模式、训练权重遵循各自许可；下载脚本中记录来源与许可。
@@ -1101,48 +1103,48 @@ Festival 源码头部声明：
 
 ### 12.1 常量与上限
 
-| 常量 | 值 | 说明 |
-|---|---:|---|
-| `MAX_SIZE` | 51 | 盘面最大边长 |
-| `MAX_INNER` | 2601 | 51×51 |
-| `MAX_BOXES` | 200 | 最大箱子数 |
-| `MAX_SOL_LEN` | 1500 | 最大解长度/路径深度 |
-| `MAX_MOVES` | 11500 | 单节点最大宏推数 |
-| `MAX_ROOMS` | 70 | 最大房间数 |
-| `MAX_REQUESTS` | 10000 | FESS 特征单元格数量上限 |
-| `MAX_TREE_LABELS` | 10000 | 树标签队列上限 |
+| 常量              |    值 | 说明                    |
+| ----------------- | ----: | ----------------------- |
+| `MAX_SIZE`        |    51 | 盘面最大边长            |
+| `MAX_INNER`       |  2601 | 51×51                   |
+| `MAX_BOXES`       |   200 | 最大箱子数              |
+| `MAX_SOL_LEN`     |  1500 | 最大解长度/路径深度     |
+| `MAX_MOVES`       | 11500 | 单节点最大宏推数        |
+| `MAX_ROOMS`       |    70 | 最大房间数              |
+| `MAX_REQUESTS`    | 10000 | FESS 特征单元格数量上限 |
+| `MAX_TREE_LABELS` | 10000 | 树标签队列上限          |
 
 ### 12.2 位标志
 
-| 名称 | 值 | 说明 |
-|---|---:|---|
-| `WALL` | 1 | 墙 |
-| `BOX` | 2 | 箱子 |
-| `TARGET` | 4 | 目标 |
-| `SOKOBAN` | 8 | 玩家可达域（云） |
-| `BASE` | 16 | 反向搜索的 base |
-| `DEADLOCK_ZONE` | 32 | 死锁区域标记 |
-| `OCCUPIED` | 3 | `WALL | BOX` |
-| `PACKED_BOX` | 6 | `BOX | TARGET` |
+| 名称                | 值 | 说明               |
+| ------------------- | -: | ------------------ |
+| `WALL`              |  1 | 墙                 |
+| `BOX`               |  2 | 箱子               |
+| `TARGET`            |  4 | 目标               |
+| `SOKOBAN`           |  8 | 玩家可达域（云）   |
+| `BASE`              | 16 | 反向搜索的 base    |
+| `DEADLOCK_ZONE`     | 32 | 死锁区域标记       |
+| `OCCUPIED`          |  3 | `WALL | BOX`       |
+| `PACKED_BOX`        |  6 | `BOX | TARGET`     |
 | `SOKOBAN_ON_TARGET` | 12 | `SOKOBAN | TARGET` |
 
 ### 12.3 CLI 参数兼容表
 
-| 参数 | 原语义 | Rust 目标 |
-|---|---|---|
-| `levels.sok` | 关卡集路径/名称；含扩展名或路径时直接使用，否则 `levels/<name>.sok` | 同 |
-| `-level N` | 只解第 N 关（1-based） | 同 |
-| `-from N` / `-to N` | 关卡范围 | 同 |
-| `-out_dir DIR` | 输出目录，默认 `.` | 同 |
-| `-time SEC` | 每关时限，默认 600 | 同 |
-| `-out_file FILE` | YASC 模式，指定解文件 | 同 |
-| `-save_best` | 未解出也保存最佳部分解 | 同 |
-| `-cores N` | 1/2/4/8；默认自动检测 | 同；新增校验与错误提示 |
-| `-alg N` | 强制策略 0–7 | 同 |
-| `-extra_mem N` | 树容量指数增量 | 同；新增 `--mem-budget-mb` |
-| `--max-expansions N` | 新增：关闭时间限制，按扩展数停止 | 测试/差分用 |
-| `--forward-only` | 新增：跳过反向搜索，直接 FESS | 开发/单测用 |
-| `--validate` | 新增：输出后立即回放校验 | 推荐默认开启（debug） |
+| 参数                 | 原语义                                                              | Rust 目标                  |
+| -------------------- | ------------------------------------------------------------------- | -------------------------- |
+| `levels.sok`         | 关卡集路径/名称；含扩展名或路径时直接使用，否则 `levels/<name>.sok` | 同                         |
+| `-level N`           | 只解第 N 关（1-based）                                              | 同                         |
+| `-from N` / `-to N`  | 关卡范围                                                            | 同                         |
+| `-out_dir DIR`       | 输出目录，默认 `.`                                                  | 同                         |
+| `-time SEC`          | 每关时限，默认 600                                                  | 同                         |
+| `-out_file FILE`     | YASC 模式，指定解文件                                               | 同                         |
+| `-save_best`         | 未解出也保存最佳部分解                                              | 同                         |
+| `-cores N`           | 1/2/4/8；默认自动检测                                               | 同；新增校验与错误提示     |
+| `-alg N`             | 强制策略 0–7                                                        | 同                         |
+| `-extra_mem N`       | 树容量指数增量                                                      | 同；新增 `--mem-budget-mb` |
+| `--max-expansions N` | 新增：关闭时间限制，按扩展数停止                                    | 测试/差分用                |
+| `--forward-only`     | 新增：跳过反向搜索，直接 FESS                                       | 开发/单测用                |
+| `--validate`         | 新增：输出后立即回放校验                                            | 推荐默认开启（debug）      |
 
 > **2026-10-29 CLI 语法修订。** Phase 7 之后统一了命令语法：参数改为
 > kebab-case（`--out-dir`、`--out-file`、`--save-best`、`--extra-mem`）；
@@ -1175,21 +1177,21 @@ Festival 源码头部声明：
 
 ### 12.6 术语表
 
-| 术语 | 含义 |
-|---|---|
-| FESS | Feature Space Search：按“特征单元格”组织候选节点的搜索 |
-| request / feature cell | FESS 的一格特征（箱子数、连通性、OOP、imagine 等） |
-| packing / 停车 | 反向搜索把箱子“停”到初始区域的过程 |
-| parking order | 反向搜索得到的箱子归位顺序，用于正向搜索的规划 |
-| OOP | Out Of Plan：箱子离开计划区域的程度 |
-| corral | 被冻结箱子围成的区域；活动 corral 是死锁判定核心 |
-| perimeter | 正/反向搜索共享的前沿哈希表，用于相遇 |
-| GIRL | Greedy Iterations / Reinforcement Learning |
-| Dragonfly | 基于曼哈顿距离的快速贪心搜索 |
-| HF | 一组基于距离/连通性/双连通/热点的评分 |
-| REV | Reverse：先反向打包，再正向墙化搜索 |
-| MPDB2 | 两箱模式库（macro pattern database 2） |
-| wobblers | 可左右摇摆、无法到达目标的箱子模式 |
+| 术语                   | 含义                                                   |
+| ---------------------- | ------------------------------------------------------ |
+| FESS                   | Feature Space Search：按“特征单元格”组织候选节点的搜索 |
+| request / feature cell | FESS 的一格特征（箱子数、连通性、OOP、imagine 等）     |
+| packing / 停车         | 反向搜索把箱子“停”到初始区域的过程                     |
+| parking order          | 反向搜索得到的箱子归位顺序，用于正向搜索的规划         |
+| OOP                    | Out Of Plan：箱子离开计划区域的程度                    |
+| corral                 | 被冻结箱子围成的区域；活动 corral 是死锁判定核心       |
+| perimeter              | 正/反向搜索共享的前沿哈希表，用于相遇                  |
+| GIRL                   | Greedy Iterations / Reinforcement Learning             |
+| Dragonfly              | 基于曼哈顿距离的快速贪心搜索                           |
+| HF                     | 一组基于距离/连通性/双连通/热点的评分                  |
+| REV                    | Reverse：先反向打包，再正向墙化搜索                    |
+| MPDB2                  | 两箱模式库（macro pattern database 2）                 |
+| wobblers               | 可左右摇摆、无法到达目标的箱子模式                     |
 
 ---
 
@@ -1330,14 +1332,14 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 
 **Gate G4 结果（2026-10-27，`G4_TIME=60 scripts/run_g4.sh`）**
 
-| 策略 | Microban 1–80 解题 | Moves / Pushes（C++ → Rust） | 比例 |
-|---|---|---|---|
-| 0 A | 80/80 → 80/80 | 6577/1745 → 6625/1763 | 100.7% / 101.0% |
-| 1 B | 80/80 → 80/80 | 6362/1691 → 6362/1691 | 100.0% / 100.0% |
-| 3 D | 80/80 → 80/80 | 6385/1719 → 6385/1719 | 100.0% / 100.0% |
-| 4 E | 80/80 → 80/80 | 6364/1707 → 6364/1707 | 100.0% / 100.0% |
-| 5 F | 80/80 → 80/80 | 6388/1713 → 6388/1713 | 100.0% / 100.0% |
-| 6 G | 80/80 → 80/80 | 6746/1789 → 6742/1793 | 99.9% / 100.2% |
+| 策略 | Microban 1–80 解题 | Moves / Pushes（C++ → Rust） | 比例            |
+| ---- | ------------------ | ----------------------------- | --------------- |
+| 0 A  | 80/80 → 80/80     | 6577/1745 → 6625/1763        | 100.7% / 101.0% |
+| 1 B  | 80/80 → 80/80     | 6362/1691 → 6362/1691        | 100.0% / 100.0% |
+| 3 D  | 80/80 → 80/80     | 6385/1719 → 6385/1719        | 100.0% / 100.0% |
+| 4 E  | 80/80 → 80/80     | 6364/1707 → 6364/1707        | 100.0% / 100.0% |
+| 5 F  | 80/80 → 80/80     | 6388/1713 → 6388/1713        | 100.0% / 100.0% |
+| 6 G  | 80/80 → 80/80     | 6746/1789 → 6742/1793        | 99.9% / 100.2%  |
 
 - 冒烟集 12/12：六个策略双方步数/推数完全相同；Microban 全部 6×80 个 Rust 解通过独立 LURD 回放（0 invalid）。
 - 策略 A 推数 101.0%，满足 ≤102%；总耗时 C++ 60.84 s vs Rust 31.06 s（0.51×，Gate 上限 1.5×）。
@@ -1373,12 +1375,12 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 
 **Gate G5 结果（2026-10-27，`G5_SKIP_BUILD=1 scripts/run_g5.sh`）**
 
-| 策略 | 集合 | C++ 解题 | Rust 解题 | C++ moves/pushes | Rust moves/pushes | C++ 时间 | Rust 时间 | 非法解 |
-|---|---|---|---|---|---|---|---|---|
-| 2 C | smoke | 12/12 | 12/12 | 123 / 40 | 123 / 40 | 0.89 s | 0.34 s | 0 |
-| 7 H | smoke | 12/12 | 12/12 | 81 / 28 | 81 / 28 | 0.79 s | 0.30 s | 0 |
-| 2 C | Microban 1–80 | 78/80 | 78/80 | 6188 / 1657 | 6188 / 1657 | 131.52 s | 122.79 s | 0 |
-| 7 H | Microban 1–80 | 80/80 | 80/80 | 6496 / 1753 | 6516 / 1743 | 7.17 s | 2.03 s | 0 |
+| 策略 | 集合          | C++ 解题 | Rust 解题 | C++ moves/pushes | Rust moves/pushes | C++ 时间 | Rust 时间 | 非法解 |
+| ---- | ------------- | -------- | --------- | ---------------- | ----------------- | -------- | --------- | ------ |
+| 2 C  | smoke         | 12/12    | 12/12     | 123 / 40         | 123 / 40          | 0.89 s   | 0.34 s    | 0      |
+| 7 H  | smoke         | 12/12    | 12/12     | 81 / 28          | 81 / 28           | 0.79 s   | 0.30 s    | 0      |
+| 2 C  | Microban 1–80 | 78/80    | 78/80     | 6188 / 1657      | 6188 / 1657       | 131.52 s | 122.79 s  | 0      |
+| 7 H  | Microban 1–80 | 80/80    | 80/80     | 6496 / 1753      | 6516 / 1743       | 7.17 s   | 2.03 s    | 0      |
 
 - 策略 C 的解题集、逐关步数/推数与 C++ 完全一致（第 8、19 关双方均在 60 秒内未解出）；策略 H 解题集一致，总步数 100.3%、总推数 99.4%。7/80 关存在步数差异（第 13、36、48、53、57、63、75 关），无非法解。
 - Dragonfly 100 关扫描（`-alg 7 -time 10`）：100/100 解出、0 非法解、2.88 s，无 panic/越界。
@@ -1392,7 +1394,6 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 - `--max-expansions` 对 Dragonfly 无对应语义（C++ 只有时间预算）；策略 H 的反向阶段始终使用时间预算。
 - `refcheck dragonfly` 显示少量关卡的 Dragonfly 前沿规模与 C++ 不同（例如第 13 关 107 vs 109 个节点），因此策略 H 的解质量存在少量关卡级差异；解题集不受影响。
 - 逐节点搜索 trace（扩展顺序/label/move）仍未实现，GIRL 差分覆盖固定输入下的评分与数值，不覆盖完整搜索轨迹；该 trace 对比留待 Phase 6。
-
 
 ---
 
@@ -1413,14 +1414,14 @@ Festival 的死锁缓存不只是备忘：`SEARCH_EXCEEDED` 标记与 mini-corra
 - 语义修正（由性能排查发现）：`is_corral_active` 恢复 C++ 的全盘箱环检查；`score_parked_boxes` 只把 `until == -1` 的初始箱视为强制。
 - Gate 结果（`G7_PIN_CPU=1 G7_REPEATS=3 G7_FUZZ_SECONDS=60 G7_SOAK_SECONDS=600 scripts/run_g7.sh`）：
 
-| 指标 | C++ | Rust | 比值 | 门槛 |
-|---|---|---|---|---|
-| 单核 Microban 1–155（60 s） | 23.576 s | 19.415 s | 0.824 | ≤1.25（目标 ≤1.10） |
-| 单核 XSokoban 1–20（60 s） | 14.969 s | 15.972 s | 1.067 | ≤1.25（目标 ≤1.10） |
-| 8 核 Microban 1–155（60 s） | 121.909 s | 69.204 s | 0.568 | ≤1.25（吞吐 ≥80%） |
-| 峰值 RSS，1 核 XSokoban 16 | 720.2 MB | 127.3 MB | 0.177 | ≤1.20 |
-| 峰值 RSS，8 核 XSokoban 16 | 5,614.7 MB | 980.1 MB | 0.175 | ≤1.20 |
-| 600 s soak | — | 1,659 次求解，0 失败 | 均值漂移 0.983 / 峰值漂移 1.017 | ≤1.20 |
+| 指标                        | C++        | Rust                 | 比值                            | 门槛                |
+| --------------------------- | ---------- | -------------------- | ------------------------------- | ------------------- |
+| 单核 Microban 1–155（60 s） | 23.576 s   | 19.415 s             | 0.824                           | ≤1.25（目标 ≤1.10） |
+| 单核 XSokoban 1–20（60 s）  | 14.969 s   | 15.972 s             | 1.067                           | ≤1.25（目标 ≤1.10） |
+| 8 核 Microban 1–155（60 s） | 121.909 s  | 69.204 s             | 0.568                           | ≤1.25（吞吐 ≥80%）  |
+| 峰值 RSS，1 核 XSokoban 16  | 720.2 MB   | 127.3 MB             | 0.177                           | ≤1.20               |
+| 峰值 RSS，8 核 XSokoban 16  | 5,614.7 MB | 980.1 MB             | 0.175                           | ≤1.20               |
+| 600 s soak                  | —          | 1,659 次求解，0 失败 | 均值漂移 0.983 / 峰值漂移 1.017 | ≤1.20               |
 
 - 稳定性：Miri 共享状态子集通过；fuzz 60 s/目标（parser 179,628 次、LURD 286,687 次、move 433 次）无崩溃；`cargo fmt --check`、`clippy -D warnings`、115 个单元测试、`cargo deny check` 全绿。
 - 回归：G3 238,928 盘面/轮 0 差异；G6 八策略步数/推数与 C++ 完全一致，1/2/4/8 核零差异，语料 155/155 + 20/20。

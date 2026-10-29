@@ -137,7 +137,7 @@ jobs:
             name="festival-rs-$version-$target"
             mkdir -p "$name"
             cp "$dir"/festival-rs* "$name"/
-            cp README.md NOTICE "$name"/
+            cp README.md LICENSE-APACHE LICENSE-MIT "$name"/
             if [[ "$target" == *-windows-* ]]; then
               zip -qr "$name.zip" "$name"
             else
