@@ -529,10 +529,13 @@ pub(crate) fn solve_hungarian_one_row(
     assert_eq!(hc.prev_n, n as isize);
     assert!(n <= MAX_BOXES, "hungarian size overflow");
 
-    debug_assert!(matches!(
-        did_one_row_change(cost, hc),
-        CacheState::OneRow(row) if row == changed_row
-    ));
+    // A child row may repeat the cached values, in which case the cached
+    // solution is returned unchanged.
+    debug_assert!(match did_one_row_change(cost, hc) {
+        CacheState::Same => true,
+        CacheState::OneRow(row) => row == changed_row,
+        CacheState::Rebuild => false,
+    });
 
     let row = cost.row(changed_row);
     let prev_row = &hc.prev_c[changed_row * n..(changed_row + 1) * n];
