@@ -9,7 +9,7 @@ use crate::board::Board;
 use crate::constants::*;
 use crate::deadlock::corral_search::corral_deadlock;
 use crate::deadlock::k_dist::{is_k_dist_deadlock, sokoban_touches_a_filled_hole};
-use crate::deadlock::patterns::{check_deadlock_pattern, patterns};
+use crate::deadlock::patterns::{groups_match, patterns};
 use crate::deadlock::rooms::is_rooms_deadlock as rooms_deadlock;
 use crate::deadlock::state::DeadlockState;
 use crate::deadlock::stuck::is_stuck_deadlock;
@@ -200,10 +200,7 @@ pub fn check_all_patterns(
     let patterns = patterns();
 
     if !pull_mode {
-        return patterns
-            .normal
-            .iter()
-            .any(|pattern| check_deadlock_pattern(pattern, &b, box_y, box_x));
+        return groups_match(&patterns.normal_groups, &b, box_y, box_x);
     }
 
     let (sok_y, sok_x) = level.initial_sokoban;
@@ -211,10 +208,7 @@ pub fn check_all_patterns(
         return false;
     }
 
-    patterns
-        .pull
-        .iter()
-        .any(|pattern| check_deadlock_pattern(pattern, &b, box_y, box_x))
+    groups_match(&patterns.pull_groups, &b, box_y, box_x)
 }
 
 fn has_pull_continuation(ctx: &LevelContext, board: &Board, search_mode: SearchMode) -> bool {
