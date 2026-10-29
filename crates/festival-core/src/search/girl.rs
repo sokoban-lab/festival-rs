@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! GIRL value function and epsilon-greedy tree descent (`girl.cpp` /
 //! `greedy.cpp`).
 //!

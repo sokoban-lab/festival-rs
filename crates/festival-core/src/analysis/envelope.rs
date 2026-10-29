@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Envelope patterns (`envelope.cpp`).
 //!
 //! Envelopes are corral patterns that cannot be solved from any player zone.

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 use std::time::{Duration, Instant};
 
 /// Time/expansion budget for a solve attempt.

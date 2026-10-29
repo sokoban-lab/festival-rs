@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Search frontier (`perimeter.cpp`).
 //!
 //! The C++ table is global and shared by all cores behind one mutex. Here the

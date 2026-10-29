@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Numeric constants shared with the C++ implementation.
 //!
 //! Tile flags and limits are kept identical on purpose: differential testing

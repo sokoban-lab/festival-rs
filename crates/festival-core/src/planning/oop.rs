@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Out-of-plan zones and advisor (`oop.cpp`).
 
 use crate::board::Board;

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

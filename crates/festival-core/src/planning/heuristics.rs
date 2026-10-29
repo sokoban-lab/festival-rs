@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Base matching, sink squares and packing advisors (`heuristics.cpp`).
 
 use crate::board::Board;

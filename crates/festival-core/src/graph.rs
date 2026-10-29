@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Box move graph (`graph.cpp`).
 //!
 //! Vertex index is `box_index * 4 + direction`, where direction is the side of

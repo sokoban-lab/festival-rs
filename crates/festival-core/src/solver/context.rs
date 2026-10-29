@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Immutable per-level analysis shared by all search threads.
 
 use crate::analysis::{self, Hotspots, Rooms};

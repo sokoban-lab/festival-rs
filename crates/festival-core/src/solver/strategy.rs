@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! One top-level strategy: reverse search, plan setup, forward search
 //! (`solve_with_alg` in `sokoban_solver.cpp`).
 

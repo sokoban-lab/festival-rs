@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Cycle deadlock detection inside the search tree (`cycle_deadlock.cpp`).
 
 use crate::constants::SearchMode;

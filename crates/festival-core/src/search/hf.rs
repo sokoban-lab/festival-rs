@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! HF / REV / BICON / MAX_DIST scoring (`hf_search.cpp`).
 
 use crate::board::Board;

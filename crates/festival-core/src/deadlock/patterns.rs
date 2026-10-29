@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Static deadlock patterns from `textfile.cpp`.
 //!
 //! The C++ solver stores patterns as text rows, parses them into a 10x10 byte

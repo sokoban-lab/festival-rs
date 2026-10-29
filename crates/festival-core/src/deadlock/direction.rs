@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Freeze checks for a single push (`deadlock.cpp:deadlock_in_direction`).
 
 use crate::board::Board;

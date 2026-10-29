@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! FESS feature cells (`request.h` / `request.cpp`).
 //!
 //! A request is the subset of a score that defines one feature-space cell.

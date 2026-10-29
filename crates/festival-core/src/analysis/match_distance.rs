@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Distance scores via minimum-cost assignment (`match_distance.cpp`).
 //!
 //! A base score is computed once and the children's scores reuse the Hungarian

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Core scheduler (`solve_with_time_control_*` in `sokoban_solver.cpp`).
 //!
 //! The C++ solver spreads the eight strategies over 1/2/4/8 worker threads.

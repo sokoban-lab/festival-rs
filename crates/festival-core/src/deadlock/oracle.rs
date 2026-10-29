@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Full deadlock oracle used by the search during Phase 3.
 //!
 //! This module ports `advanced_deadlock.cpp`, the matching check from

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Hotspot table (`hotspot.cpp`).
 //!
 //! A hotspot is a box that blocks another box's way to any target.

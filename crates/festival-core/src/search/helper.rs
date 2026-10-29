@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Per-thread search state (`helper.h`).
 //!
 //! Owns the request ring, the solution buffer and the Phase 4 planning data

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! FESS main loop (`engine.cpp`).
 //!
 //! Works for every Phase 4 forward mode; GIRL and Dragonfly stay for Phase 5.

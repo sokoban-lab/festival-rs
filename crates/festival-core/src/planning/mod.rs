@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Reverse-search planning data: parking order, OOP zones, imagined boards.
 //!
 //! The C++ solver keeps these in `helper` (`park_order.cpp`, `oop.cpp`,

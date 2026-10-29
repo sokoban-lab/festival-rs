@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Parking order extraction and scoring (`park_order.cpp`).
 
 use crate::board::Board;

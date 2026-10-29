@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! `MAX_DIST_SEARCH` per-node Hungarian distances (`max_dist.cpp`).
 
 use crate::analysis::match_distance::compute_match_distance;

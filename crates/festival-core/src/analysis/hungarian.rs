@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Minimum-cost assignment (`hungarian.cpp`).
 //!
 //! The C++ solver keeps a one-entry cache so that evaluating the children of a

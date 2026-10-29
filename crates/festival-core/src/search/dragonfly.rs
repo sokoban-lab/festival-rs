@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Dragonfly pull search (`dragonfly.cpp` / `dragonfly_queue.cpp`).
 //!
 //! A greedy best-first walk over pull moves, ordered by the Hungarian

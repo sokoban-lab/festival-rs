@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Arena-indexed FESS search tree (`tree.h` / `tree.cpp`).
 //!
 //! C++ stores raw pointers between nodes, expansions and boards. This port

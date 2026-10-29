@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Solution path reconstruction and output (`sol.cpp`).
 //!
 //! Search nodes store macro pushes. `find_sol_move` replays the player walking

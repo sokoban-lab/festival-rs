@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Reverse packing search (`packing_search.cpp`).
 //!
 //! The reverse search starts from the solved position (boxes on targets) and

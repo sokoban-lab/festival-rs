@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Label queues (`queue.cpp`).
 //!
 //! The comparator needs the current expansion scores, so heap operations take

@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Core algorithms of the Festival Sokoban solver.
 //!
 //! The crate is `#![forbid(unsafe_code)]`: all state is either owned by a

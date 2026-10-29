@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Forward-only solve entry point used by the Phase 2 CLI.
 
 use std::time::Duration;

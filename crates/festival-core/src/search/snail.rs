@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 //! Snail / netlock level detection and scoring (`snail.cpp`).
 //!
 //! Both modes replace the regular score payload when the level's targets form

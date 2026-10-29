@@ -1,6 +1,3 @@
-// Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
-// Rust port: festival-rs contributors.
-
 use std::fmt;
 use std::fs;
 use std::io::Read as _;
@@ -238,7 +235,6 @@ fn run(args: &Args) -> Result<(), String> {
     if human {
         println!("===================================");
         println!("{BANNER_NAME}");
-        println!("Copyright 2019-2022 by Yaron Shoham");
         println!("===================================");
         println!("{} levels loaded from {input_name}", raws.len());
     }
