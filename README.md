@@ -13,7 +13,7 @@ Compared with Festival 3.1 on the same host; both solvers solve every level in t
 | XSokoban (90)    | Total time |   176.736 s | 194.512 s |  **0.909** |
 |                  | Peak RSS   |    339.6 MB |  870.8 MB |  **0.390** |
 
-Times and RSS cover the full level-set batch; see [`docs/benchmarks.md`](docs/benchmarks.md) for details.
+Times and RSS cover the full level-set batch; see [`docs/benchmarks.md`](docs/benchmarks.md) for details. Rust-only optimizations that go beyond the C++ reference are tracked in [`docs/optimization.md`](docs/optimization.md).
 
 ## Known Differentials
 

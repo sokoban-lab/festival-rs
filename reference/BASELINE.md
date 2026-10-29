@@ -734,6 +734,46 @@ fmt and cargo-deny are clean; Microban 155/155 (22,486 moves / 5,920 pushes)
 and XSokoban 20/20 (18,143 / 5,466) reproduce the baseline totals with 0
 invalid solutions.
 
+## Biconnected shift follow-up (2026-10-29)
+
+`Graph::build` still spent 96–98% of its time in `init_shift`, which placed a
+temporary box on every free cell and labelled the surrounding player
+components with a BFS: 1.89 s of a 10.44 s XSokoban 1–20 run and 0.76 s of a
+2.37 s XSokoban 18 strategy-A run, over 15,097 and 6,098 builds. Two sides of
+a cell stay connected once a box occupies it exactly when their incident edges
+belong to the same biconnected block, so one iterative Tarjan pass per build
+(level-indexed `u16` arrays, every component, scratch reused on `Graph`)
+replaces the per-cell BFS; `bfs::mark_connectivities_around_place` is gone.
+
+Interleaved same-day wall clock (no CPU pinning; the host was slower than on
+the Gate G7 day, so only the within-pair deltas are meaningful):
+
+| Run | Before | After | Change |
+|---|---|---|---|
+| XSokoban 1–20, 1 core, 3 reps | 9.87–9.98 s (median 9.95) | 8.44–8.54 s (median 8.54) | −14.5% |
+| XSokoban 18, strategy A, 1 core, 5 reps | 2.46–3.04 s (median 2.62) | 1.70–1.83 s (median 1.74) | −33.4% |
+| Microban 1–155, 1 core, 5 reps | 9.09–10.98 s (median 10.57) | 7.89–9.29 s (median 8.88) | −16.0% |
+| Microban 1–155, 8 cores, 3 reps | 13.08–13.47 s (median 13.27) | 11.87–12.99 s (median 11.91) | −10.3% |
+
+A first Microban batch contained a 17.5 s outlier on an otherwise 9.7–10.3 s
+series; it was discarded and the 5-rep series above rerun. With temporary
+timers (reverted afterwards) `Graph::build` fell from 1.89 s to about 0.25 s on
+XSokoban 1–20 and from 0.78 s to 0.07 s on XSokoban 18 strategy A, leaving it
+at 2–3% of runtime.
+
+Verification: 120 unit tests pass, including two new differential tests that
+compare the new shift matrix against a per-pair BFS on six handcrafted boards
+and 300 random wall configurations; clippy, fmt and cargo-deny are clean.
+XSokoban 1–20 reproduces 18,143 moves / 5,466 pushes and Microban 155/155
+reproduces 22,486 / 5,920; `solutions.sok` is byte-identical apart from the
+solver timestamp, and `--validate` replays every solution.
+
+```text
+37e630259e63f41654e7727d85eca8314be1d49870b9c3081158eb536bf94992 *target/ab/shift-bench.txt
+cdd62a76e69db37196d21e8421ae842da6314bb90d1d67a0aef834d9181fdcef *target/ab/val-after-x.txt
+9c5d4e98704033570a98749a03cb4122c6beb16d791daa76b149d87baea94d04 *target/ab/val-after-mb.txt
+```
+
 ## Still missing
 
 - The 24-hour soak acceptance run has not been executed; the recorded soak is
