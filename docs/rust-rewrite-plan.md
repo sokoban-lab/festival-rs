@@ -1144,6 +1144,13 @@ Festival 源码头部声明：
 | `--forward-only` | 新增：跳过反向搜索，直接 FESS | 开发/单测用 |
 | `--validate` | 新增：输出后立即回放校验 | 推荐默认开启（debug） |
 
+> **2026-10-29 CLI 语法修订。** Phase 7 之后统一了命令语法：参数改为
+> kebab-case（`--out-dir`、`--out-file`、`--save-best`、`--extra-mem`）；
+> `--level` 接受 `all`、`3`、`1..5`、`2,7,9`；`--time` 接受带单位时长
+> （`ms`/`s`/`m`/`h`）；`--alg` 接受 `a`..`h` 或 `0`..`7`；输入 `-` 表示从
+> stdin 读取；`--format json` 输出机器可读结果。C++ 单横线参数与
+> `--from`/`--to` 已移除，上表保留为历史兼容记录；C++ 基线脚本仍使用原参数。
+
 ### 12.4 失败原因字符串（用于 `times.txt`）
 
 - `Invalid board`

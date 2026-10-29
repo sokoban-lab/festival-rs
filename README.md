@@ -17,16 +17,16 @@ before the next one starts.
 | Phase 3 | complete (deadlock subsystem, Gate G3) | deadlock zone, corral/π-corral, positions arena, deadlock cache, advanced/matching/pull elimination, k-distance, XY, rooms, wobblers, mini search, MPDB2, stuck learning, cycle deadlock, envelope learning, C++ deadlock differential |
 | Phase 4 | complete (packing/planning/HF, Gate G4) | reverse packing, park order, OOP, imagine/overlap, base matching, HF/BICON/MAX_DIST/REV scoring, strategies A/B/D/E/F/G end-to-end, packing-plan differential |
 | Phase 5 | complete (GIRL/Dragonfly, Gate G5) | GIRL value function and ε-greedy tree descent, Dragonfly priority-queue pull search, NAIVE forward scoring, strategies C/H, GIRL score/value differential |
-| Phase 6 | complete (scheduler/multicore, Gate G6) | SNAIL/NETLOCK detection and scoring, 8-strategy schedule, 1/2/4/8-core workers with shared perimeter and atomic cancellation, `-save_best`, XSokoban corpus, snail-state differential |
+| Phase 6 | complete (scheduler/multicore, Gate G6) | SNAIL/NETLOCK detection and scoring, 8-strategy schedule, 1/2/4/8-core workers with shared perimeter and atomic cancellation, `--save-best`, XSokoban corpus, snail-state differential |
 | Phase 7 | complete (performance/memory/stability, Gate G7; 24 h soak pending) | scratch/graph reuse, cross-level worker reuse, generation-cleared deadlock cache, C++-equivalent phase clock, rectangle-init single-queue BFS with direct component marking, `try_reserve` failure path, parser/LURD/move fuzzing, RSS soak harness |
 
 The CLI runs the same reverse-packing → plan → forward-FESS structure as C++.
-Without `-alg` it runs the eight-strategy schedule over 1/2/4/8 workers, like
-C++; `-alg N` forces one strategy, and `--forward-only` keeps the Phase 2
+Without `--alg` it runs the eight-strategy schedule over 1/2/4/8 workers, like
+C++; `--alg a`..`h` forces one strategy, and `--forward-only` keeps the Phase 2
 NORMAL forward search. All eight strategies solve Microban 1–80 with the same
 solve set as C++ (Gate G4). Strategy C (GIRL) has the same 78/80 solved set as
 C++ and identical total moves/pushes; strategy H (Dragonfly + NAIVE) solves
-80/80 with a 0.3% quality difference (Gate G5). With `-cores 1` the schedule
+80/80 with a 0.3% quality difference (Gate G5). With `--cores 1` the schedule
 solves the same Microban 155 and XSokoban 1–20 sets as C++ (Gate G6), and
 1/2/4/8-core runs match C++ on Microban 1–40. Every Rust solution replays
 independently. Pinned single-core runtime is 0.56–0.57× (Microban 1–155) and
@@ -35,7 +35,7 @@ independently. Pinned single-core runtime is 0.56–0.57× (Microban 1–155) an
 and peak RSS is 0.22× (Gate G7 plus the worker-reuse and BFS follow-ups; the
 24-hour soak is still pending).
 
-`-cores` accepts 1/2/4/8 and defaults to the host processor count capped at 8.
+`--cores` accepts 1/2/4/8 and defaults to the host processor count capped at 8.
 Each worker owns its tree, helper and deadlock state; the perimeter and the
 `any_core_solved` cancellation flag are shared. SNAIL/NETLOCK levels are
 detected during preprocessing and switch strategies A/B/C to the corresponding
@@ -43,7 +43,7 @@ scoring modes with the C++ time allocation.
 
 The deadlock subsystem remains the G3 implementation: 238,928 sampled boards
 with 0 verdict mismatches and a cache-on/cache-off invariant. Output files are
-`solutions.sok` and `times.txt` in `-out_dir`; every solution is replayed with
+`solutions.sok` and `times.txt` in `--out-dir`; every solution is replayed with
 the independent validator.
 
 ## Build and run
@@ -58,14 +58,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 Solve the bundled smoke levels:
 
 ```sh
-cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 -time 60 -out_dir out
-cargo run -p festival-cli -- levels/smoke/smoke.sok --max-expansions 500000 -out_dir out
+cargo run -p festival-cli -- levels/smoke/smoke.sok --level 1 --time 60s --out-dir out
+cargo run -p festival-cli -- levels/smoke/smoke.sok --max-expansions 500000 --out-dir out
 ```
 
 Analyse levels without searching:
 
 ```sh
-cargo run -p festival-cli -- levels/smoke/smoke.sok -level 1 --analyse --dump
+cargo run -p festival-cli -- levels/smoke/smoke.sok --level 1 --analyse --dump
 cargo run -p festival-bench -- levels/smoke/smoke.sok
 ```
 
@@ -137,23 +137,49 @@ because this Visual Studio install has no x64 AddressSanitizer component.
 Baseline commands, recorded results and per-level quality differences are in
 [`reference/BASELINE.md`](reference/BASELINE.md).
 
-Original single-dash options (`-level`, `-from`, `-to`, `-out_dir`, `-time`,
-`-out_file`, `-save_best`, `-cores`, `-alg`, `-extra_mem`) and the new
-`--max-expansions`, `--forward-only`, `--validate`, `--analyse`,
-`--tree-log-size` options are accepted. `-out_file` selects YASC mode: only the
-given solution file is written and `times.txt` is skipped.
+## Command line
 
-`--max-expansions N` disables the wall-clock limit, which makes runs
-reproducible for differential testing.
+```text
+festival-rs <INPUT> [OPTIONS]
+```
 
-Without `-alg` the eight-strategy schedule runs; `-alg N` forces one strategy.
-The forced choice is honored for every core count (C++ 3.1 ignores it when
-`-cores > 1`). `-cores` defaults to 1/2/4/8 rounded down from the available
-processors; C++ additionally checks RAM thresholds, which this port does not.
+`INPUT` is a level set file, a name resolved as `<out-dir>/levels/<name>.sok`
+when it contains no `/`, `\` or `.`, or `-` to read the level set from standard
+input. Output files are `solutions.sok` and `times.txt` in `--out-dir`.
 
-A level argument containing `/`, `\` or `.` is used as a path. Otherwise it is
-resolved as `<out_dir>/levels/<name>.sok`, matching the C++ behavior. The
-default level set is `XSokoban`; it is not bundled.
+- `--level <SPEC>` selects levels, 1-based: `all` (the default), `3`, `1..5`,
+  or `2,7,9`.
+- `--time <DURATION>` sets the per-level budget. Units are `ms`, `s`, `m` and
+  `h`; a bare number means seconds (`600` by default). `0` skips the search,
+  which measures preprocessing and setup only.
+- `--alg <STRATEGY>` forces one strategy, `a`..`h` or `0`..`7`. Without it the
+  eight-strategy schedule runs. The forced choice is honored for every core
+  count (C++ 3.1 ignores it when `--cores > 1`).
+- `--cores <N>` accepts 1/2/4/8 and defaults to 1/2/4/8 rounded down from the
+  available processors; C++ additionally checks RAM thresholds, which this port
+  does not.
+- `--format human|json` selects human readable output or one JSON document on
+  standard output (`schema`, `command`, `results`, `summary`).
+- `--out-file <FILE>` selects YASC mode: only the given solution file is
+  written and `times.txt` is skipped.
+- `--save-best` keeps the best partial solution when a level is not solved.
+- `--max-expansions N` disables the wall-clock limit, which makes runs
+  reproducible for differential testing.
+- `--forward-only` skips reverse packing and runs the Phase 2 NORMAL search.
+- `--analyse` prints static analysis instead of solving; add `--dump` for the
+  board and room map.
+- `--validate` replays every produced solution; `--tree-log-size N` and
+  `--extra-mem N` control the tree capacity (default `log2(nodes) = 20`).
+
+The C++-style single-dash options and `--from`/`--to` were removed; passing one
+prints the replacement to use.
+
+```sh
+festival-rs levels/smoke/smoke.sok --level 1..3 --format json --out-dir out
+cat levels/smoke/smoke.sok | festival-rs - --level 1 --time 30s
+```
+
+The default level set is `XSokoban`; it is not bundled.
 
 ## Layout
 

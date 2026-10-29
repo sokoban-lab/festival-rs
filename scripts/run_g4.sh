@@ -64,7 +64,7 @@ run_solver() {
 
     if [ -n "$last" ]; then
         range_cpp=(-from 1 -to "$last")
-        range_rust=(--from 1 --to "$last")
+        range_rust=(--level "1..$last")
     fi
 
     mkdir -p "$cpp_dir" "$rust_dir"
@@ -78,7 +78,7 @@ run_solver() {
 
     start=$(now_ms)
     ./target/release/festival-rs.exe "$levels_file" "${range_rust[@]}" \
-        --time "$TIME" --cores 1 --alg "$alg" --out_dir "$rust_dir" > "$rust_dir/run.log"
+        --time "$TIME" --cores 1 --alg "$alg" --out-dir "$rust_dir" > "$rust_dir/run.log"
     end=$(now_ms)
     local rust_ms=$((end - start))
 

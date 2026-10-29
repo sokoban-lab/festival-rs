@@ -38,7 +38,7 @@ target/festival-cpp.exe levels/corpus/microban.xsb \
 
 # Rust (from repository root)
 cargo run --release -q -p festival-cli -- levels/corpus/microban.xsb \
-  --from 1 --to 40 --time 60 --cores 1 --alg 0 --out_dir target/g2-rust
+  --level 1..40 --time 60 --cores 1 --alg 0 --out-dir target/g2-rust
 ```
 
 > Phase 4 restored C++ compatibility: `--alg 0` now means strategy A. To
@@ -84,7 +84,7 @@ b8d50898111416bcdf679189def23d4b49bd4b0420d5a15bc57fe26813d05f5b *target/g2-rust
 
 ```sh
 cargo run --release -q -p festival-cli -- levels/corpus/microban.xsb \
-  --from 1 --to 100 --time 1 --cores 1 --alg 0 --out_dir target/g2-no-panic
+  --level 1..100 --time 1 --cores 1 --alg 0 --out-dir target/g2-no-panic
 ```
 
 Exit status 0, 96/100 solved at a 1 s budget, zero panics or bounds errors.

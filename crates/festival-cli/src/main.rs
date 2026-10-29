@@ -1,16 +1,17 @@
 // Derived from Festival 3.1 (C++), Copyright 2018-2022 Yaron Shoham.
 // Rust port: festival-rs contributors.
 
-use std::ffi::OsString;
+use std::fmt;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use festival_core::constants::MAX_INNER;
 use festival_core::io::lurd;
-use festival_core::io::sok::{RawLevel, load_levels, resolve_level_file};
+use festival_core::io::sok::{RawLevel, load_levels, parse_levels, resolve_level_file};
 use festival_core::io::solution::{
     append_level_to_solutions, append_solution, append_solution_time, append_times_row,
     write_solutions_header, write_times_footer, write_times_header,
@@ -22,6 +23,11 @@ use festival_core::solver::{
 };
 use festival_core::{Level, LevelContext, SearchClock};
 
+mod json;
+mod spec;
+
+use spec::{LevelSpec, parse_duration, parse_level_spec};
+
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -29,78 +35,166 @@ const SOLVER_NAME: &str = "Festival 3.1";
 const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
 const BASE_TREE_LOG_SIZE: u32 = 20;
 
+/// Options of the removed C++-compatible syntax, with their replacements.
+const REMOVED_OPTIONS: [(&str, &str); 16] = [
+    ("-level", "--level <SPEC>"),
+    ("-from", "--level <SPEC>"),
+    ("-to", "--level <SPEC>"),
+    ("--from", "--level <SPEC>"),
+    ("--to", "--level <SPEC>"),
+    ("-out_dir", "--out-dir"),
+    ("--out_dir", "--out-dir"),
+    ("-out_file", "--out-file"),
+    ("--out_file", "--out-file"),
+    ("-time", "--time"),
+    ("-save_best", "--save-best"),
+    ("--save_best", "--save-best"),
+    ("-cores", "--cores"),
+    ("-alg", "--alg"),
+    ("-extra_mem", "--extra-mem"),
+    ("--extra_mem", "--extra-mem"),
+];
+
 #[derive(Debug, Parser)]
 #[command(
     name = "festival-rs",
-    about = "Festival 3.1 Rust port: all strategies and the 1/2/4/8-core scheduler.",
-    disable_help_subcommand = true
+    version,
+    about = "Festival 3.1 Rust port: all strategies and the 1/2/4/8-core scheduler."
 )]
 struct Args {
-    /// Level set file, or a name resolved under `<out_dir>/levels/<name>.sok`.
-    #[arg(value_name = "levels.sok")]
-    levels: String,
+    /// Level set file, a name resolved under `<out-dir>/levels/<name>.sok`, or
+    /// `-` to read from standard input.
+    #[arg(value_name = "INPUT")]
+    input: String,
 
-    #[arg(long = "level", value_name = "N")]
-    level: Option<usize>,
+    /// Levels to solve, 1-based: `all`, `3`, `1..5`, or `2,7,9`.
+    #[arg(
+        long,
+        value_name = "SPEC",
+        default_value = "all",
+        value_parser = parse_level_spec
+    )]
+    level: LevelSpec,
 
-    #[arg(long = "from", value_name = "N")]
-    from: Option<usize>,
-
-    #[arg(long = "to", value_name = "N")]
-    to: Option<usize>,
-
-    #[arg(long = "out_dir", value_name = "DIR", default_value = ".")]
+    /// Output directory for `solutions.sok` and `times.txt`.
+    #[arg(long, value_name = "DIR", default_value = ".")]
     out_dir: PathBuf,
 
-    #[arg(long = "time", value_name = "SEC", default_value_t = 600)]
-    time: u64,
+    /// Time limit per level; units `ms`, `s`, `m`, `h`; a bare number is seconds.
+    #[arg(
+        long,
+        value_name = "DURATION",
+        default_value = "600",
+        value_parser = parse_duration
+    )]
+    time: Duration,
 
-    #[arg(long = "out_file", value_name = "FILE")]
+    /// YASC mode: write only this solution file and skip `times.txt`.
+    #[arg(long, value_name = "FILE")]
     out_file: Option<PathBuf>,
 
-    #[arg(long = "save_best")]
+    /// Keep the best partial solution when a level is not solved.
+    #[arg(long)]
     save_best: bool,
 
-    /// Worker threads: 1/2/4/8. Defaults to the machine, like C++.
-    #[arg(long = "cores", value_name = "N")]
+    /// Worker threads: 1/2/4/8. Defaults to the host processor count, capped.
+    #[arg(long, value_name = "N")]
     cores: Option<usize>,
 
-    /// Force one strategy (0..7). Without it the eight-strategy schedule runs.
-    #[arg(long = "alg", value_name = "N")]
-    alg: Option<i32>,
+    /// Force strategy `a`..`h` (or `0`..`7`); the default runs all eight.
+    #[arg(long, value_name = "STRATEGY", value_enum, ignore_case = true)]
+    alg: Option<Strategy>,
 
-    #[arg(long = "extra_mem", value_name = "N", default_value_t = 0)]
+    /// Add N to the tree capacity exponent.
+    #[arg(long, value_name = "N", default_value_t = 0)]
     extra_mem: i32,
 
-    /// Disable the time limit and stop after N expansions (differential mode).
-    #[arg(long = "max-expansions", value_name = "N")]
+    /// Disable the time limit and stop after N expansions.
+    #[arg(long, value_name = "N")]
     max_expansions: Option<u64>,
 
-    /// Skip the reverse packing search and run NORMAL FESS from the initial
-    /// position (development/differential mode).
-    #[arg(long = "forward-only")]
+    /// Skip reverse packing and run NORMAL FESS from the initial position.
+    #[arg(long)]
     forward_only: bool,
 
     /// Replay and validate every produced solution.
-    #[arg(long = "validate")]
+    #[arg(long)]
     validate: bool,
 
     /// Print a static analysis summary instead of solving.
-    #[arg(long = "analyse")]
+    #[arg(long)]
     analyse: bool,
 
-    /// Dump boards, masks and room decomposition (with --analyse).
-    #[arg(long = "dump")]
+    /// Dump boards, masks and room decomposition (with `--analyse`).
+    #[arg(long)]
     dump: bool,
 
-    /// Tree capacity as `log2(nodes)`; defaults to 20 and can be raised for
-    /// large levels. `-extra_mem` is added on top.
-    #[arg(long = "tree-log-size", value_name = "N")]
+    /// Tree capacity as `log2(nodes)`; `--extra-mem` is added on top.
+    #[arg(long, value_name = "N")]
     tree_log_size: Option<u32>,
+
+    /// Output format.
+    #[arg(long, value_name = "FORMAT", value_enum, default_value = "human")]
+    format: Format,
+}
+
+/// The output format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Format {
+    /// Human readable output.
+    Human,
+    /// Machine readable JSON output.
+    Json,
+}
+
+/// A forced strategy; `a` is 0 (strategy A) and `h` is 7 (strategy H).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum Strategy {
+    #[value(alias = "0")]
+    A,
+    #[value(alias = "1")]
+    B,
+    #[value(alias = "2")]
+    C,
+    #[value(alias = "3")]
+    D,
+    #[value(alias = "4")]
+    E,
+    #[value(alias = "5")]
+    F,
+    #[value(alias = "6")]
+    G,
+    #[value(alias = "7")]
+    H,
+}
+
+impl Strategy {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+impl fmt::Display for Strategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::A => "A",
+            Self::B => "B",
+            Self::C => "C",
+            Self::D => "D",
+            Self::E => "E",
+            Self::F => "F",
+            Self::G => "G",
+            Self::H => "H",
+        })
+    }
 }
 
 fn main() -> ExitCode {
-    let args = Args::parse_from(normalized_args());
+    if let Some((name, replacement)) = removed_option() {
+        eprintln!("error: `{name}` was removed; use `{replacement}` instead");
+        return ExitCode::from(2);
+    }
+    let args = Args::parse();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -110,32 +204,19 @@ fn main() -> ExitCode {
     }
 }
 
-fn normalized_args() -> Vec<OsString> {
-    const SINGLE_DASH: [(&str, &str); 10] = [
-        ("-level", "--level"),
-        ("-from", "--from"),
-        ("-to", "--to"),
-        ("-out_dir", "--out_dir"),
-        ("-time", "--time"),
-        ("-out_file", "--out_file"),
-        ("-save_best", "--save_best"),
-        ("-cores", "--cores"),
-        ("-alg", "--alg"),
-        ("-extra_mem", "--extra_mem"),
-    ];
-
-    std::env::args_os()
-        .map(|arg| {
-            if let Some(text) = arg.to_str() {
-                for (from, to) in SINGLE_DASH {
-                    if text == from {
-                        return OsString::from(to);
-                    }
-                }
-            }
-            arg
-        })
-        .collect()
+fn removed_option() -> Option<(&'static str, &'static str)> {
+    for arg in std::env::args_os().skip(1) {
+        let Some(arg) = arg.to_str() else {
+            continue;
+        };
+        if arg == "--" {
+            break;
+        }
+        if let Some(&entry) = REMOVED_OPTIONS.iter().find(|(name, _)| *name == arg) {
+            return Some(entry);
+        }
+    }
+    None
 }
 
 fn run(args: &Args) -> Result<(), String> {
@@ -145,38 +226,66 @@ fn run(args: &Args) -> Result<(), String> {
         }
     }
     if let Some(alg) = args.alg {
-        if !(0..=7).contains(&alg) {
-            return Err("Algorithm number should be 0..7".to_string());
-        }
-        if !strategy_supported(alg as usize) {
+        if !strategy_supported(alg.index()) {
             return Err(format!("strategy {alg} is not implemented"));
         }
     }
 
-    let path = resolve_level_file(&args.out_dir, &args.levels);
-    let raws = load_levels(&path).map_err(|err| format!("{}: {err}", path.display()))?;
-    let (first, last) = select_range(args, raws.len())?;
+    let (raws, input_name) = load_input(args)?;
+    let selected = select_levels(args, raws.len())?;
+    let human = args.format == Format::Human;
 
-    println!("===================================");
-    println!("{BANNER_NAME}");
-    println!("Copyright 2019-2022 by Yaron Shoham");
-    println!("===================================");
-    println!("{} levels loaded from {}", raws.len(), path.display());
+    if human {
+        println!("===================================");
+        println!("{BANNER_NAME}");
+        println!("Copyright 2019-2022 by Yaron Shoham");
+        println!("===================================");
+        println!("{} levels loaded from {input_name}", raws.len());
+    }
 
     if args.analyse {
-        return run_analysis(args, raws, first, last);
+        return run_analysis(args, raws, &selected);
     }
 
     let cores = args.cores.unwrap_or_else(default_cores);
-    if args.forward_only {
-        println!("note: --forward-only runs the Phase 2 NORMAL search on one thread.");
-    } else if let Some(alg) = args.alg {
-        println!("using {cores} thread(s); forced strategy {alg}");
-    } else {
-        println!("using {cores} thread(s); scheduling strategies A-H");
+    if human {
+        if args.forward_only {
+            println!("note: --forward-only runs the Phase 2 NORMAL search on one thread.");
+        } else if let Some(alg) = args.alg {
+            println!("using {cores} thread(s); forced strategy {alg}");
+        } else {
+            println!("using {cores} thread(s); scheduling strategies A-H");
+        }
     }
 
-    run_solver(args, raws, first, last, cores)
+    run_solver(args, raws, &selected, cores)
+}
+
+fn load_input(args: &Args) -> Result<(Vec<RawLevel>, String), String> {
+    if args.input == "-" {
+        let mut text = String::new();
+        std::io::stdin()
+            .read_to_string(&mut text)
+            .map_err(|err| format!("stdin: {err}"))?;
+        let raws = parse_levels(&text);
+        if raws.is_empty() {
+            return Err("no levels in stdin".to_string());
+        }
+        Ok((raws, "stdin".to_string()))
+    } else {
+        let path = resolve_level_file(&args.out_dir, &args.input);
+        let raws = load_levels(&path).map_err(|err| format!("{}: {err}", path.display()))?;
+        Ok((raws, path.display().to_string()))
+    }
+}
+
+fn select_levels(args: &Args, total: usize) -> Result<Vec<usize>, String> {
+    if total == 0 {
+        return Err("no levels in input".to_string());
+    }
+    args.level
+        .select(total)
+        .map_err(|err| format!("{err} (input has {total} levels)"))
 }
 
 /// Per-level outcome normalized across the scheduler and `--forward-only`.
@@ -200,10 +309,10 @@ fn solution_list(outcomes: &[SolveOutcome]) -> Vec<SolveOutcome> {
 fn run_solver(
     args: &Args,
     raws: Vec<RawLevel>,
-    first: usize,
-    last: usize,
+    selected: &[usize],
     cores: usize,
 ) -> Result<(), String> {
+    let human = args.format == Format::Human;
     let yasc_mode = args.out_file.is_some();
     let solution_path = match &args.out_file {
         Some(path) => path.clone(),
@@ -220,7 +329,7 @@ fn run_solver(
         }
     }
 
-    write_solutions_header(&solution_path, &args.levels, SOLVER_NAME)
+    write_solutions_header(&solution_path, &args.input, SOLVER_NAME)
         .map_err(|err| format!("{}: {err}", solution_path.display()))?;
     if !yasc_mode {
         write_times_header(&times_path, SOLVER_NAME)
@@ -236,12 +345,13 @@ fn run_solver(
     let mut total_moves = 0usize;
     let mut total_pushes = 0usize;
     let mut total_elapsed = Duration::ZERO;
+    let mut results = Vec::new();
 
     for (index, raw) in raws.into_iter().enumerate() {
-        let level_number = index + 1;
-        if level_number < first || level_number > last {
+        if !selected.contains(&index) {
             continue;
         }
+        let level_number = index + 1;
 
         record += 1;
         total_levels += 1;
@@ -249,8 +359,10 @@ fn run_solver(
         let level_epoch = epoch_secs();
         let title = raw.title.clone();
 
-        println!();
-        println!("Level {level_number}: {title}");
+        if human {
+            println!();
+            println!("Level {level_number}: {title}");
+        }
 
         if let Some(initial) = raw.board {
             append_level_to_solutions(&solution_path, level_number, &title, &initial)
@@ -269,12 +381,21 @@ fn run_solver(
                     &title,
                 )?;
                 total_elapsed += level_started.elapsed();
-                println!("  failed: {}", err.reason());
+                if human {
+                    println!("  failed: {}", err.reason());
+                } else {
+                    results.push(failed_result(
+                        level_number,
+                        &title,
+                        err.reason(),
+                        level_started.elapsed(),
+                    ));
+                }
                 continue;
             }
         };
 
-        let analysis_clock = SearchClock::new(Some(Duration::from_secs(args.time)), None);
+        let analysis_clock = SearchClock::new(Some(args.time), None);
         let ctx = match LevelContext::analyse(level, &analysis_clock) {
             Ok(ctx) => ctx,
             Err(err) => {
@@ -287,14 +408,29 @@ fn run_solver(
                     &title,
                 )?;
                 total_elapsed += level_started.elapsed();
-                println!("  analysis failed: {}", err.reason());
+                if human {
+                    println!("  analysis failed: {}", err.reason());
+                } else {
+                    results.push(failed_result(
+                        level_number,
+                        &title,
+                        err.reason(),
+                        level_started.elapsed(),
+                    ));
+                }
                 continue;
             }
         };
 
         // C++ budgets with `time(0)`; compare epoch seconds so the remaining
         // whole-second count matches even when preprocessing straddles a tick.
-        let remaining = Duration::from_secs(args.time.saturating_sub(epoch_secs() - level_epoch));
+        // Sub-second budgets have no C++ equivalent, so they use the clock.
+        let remaining = if args.time >= Duration::from_secs(1) {
+            let elapsed_secs = epoch_secs().saturating_sub(level_epoch);
+            args.time.saturating_sub(Duration::from_secs(elapsed_secs))
+        } else {
+            args.time.saturating_sub(level_started.elapsed())
+        };
 
         let result = if args.forward_only {
             let config = FessConfig {
@@ -332,14 +468,23 @@ fn run_solver(
                         &title,
                     )?;
                     total_elapsed += level_started.elapsed();
-                    println!("  solve failed: {}", err.reason());
+                    if human {
+                        println!("  solve failed: {}", err.reason());
+                    } else {
+                        results.push(failed_result(
+                            level_number,
+                            &title,
+                            err.reason(),
+                            level_started.elapsed(),
+                        ));
+                    }
                     continue;
                 }
             }
         } else {
             let config = SchedulerConfig {
                 cores,
-                forced_alg: args.alg.map(|alg| alg as usize),
+                forced_alg: args.alg.map(Strategy::index),
                 time_limit: remaining,
                 max_expansions: args.max_expansions,
                 log_max_nodes,
@@ -368,7 +513,16 @@ fn run_solver(
                         &title,
                     )?;
                     total_elapsed += level_started.elapsed();
-                    println!("  solve failed: {}", err.reason());
+                    if human {
+                        println!("  solve failed: {}", err.reason());
+                    } else {
+                        results.push(failed_result(
+                            level_number,
+                            &title,
+                            err.reason(),
+                            level_started.elapsed(),
+                        ));
+                    }
                     continue;
                 }
             }
@@ -398,13 +552,21 @@ fn run_solver(
         append_solution_time(&solution_path, level_started.elapsed(), SOLVER_NAME)
             .map_err(|err| format!("{}: {err}", solution_path.display()))?;
 
-        let mut failure_reason = result.failure_reason.unwrap_or("Unknown reason");
-        if !result.solved
-            && level_started.elapsed().as_secs() >= args.time
-            && failure_reason != "Too many moves"
-        {
-            failure_reason = "Time limit exceeded";
-        }
+        let failure_reason = if result.solved {
+            None
+        } else {
+            let mut reason = result
+                .failure_reason
+                .unwrap_or("Unknown reason")
+                .to_string();
+            if args.max_expansions.is_none()
+                && level_started.elapsed() >= args.time
+                && reason != "Too many moves"
+            {
+                reason = "Time limit exceeded".to_string();
+            }
+            Some(reason)
+        };
         let (moves, pushes) = if result.solved {
             result
                 .reported
@@ -421,7 +583,7 @@ fn run_solver(
                 level_started.elapsed(),
                 SOLVER_NAME,
                 result.solved,
-                failure_reason,
+                failure_reason.as_deref().unwrap_or("Unknown reason"),
                 moves,
                 pushes,
                 &title,
@@ -433,23 +595,48 @@ fn run_solver(
             solved_levels += 1;
             total_moves += moves;
             total_pushes += pushes;
-            println!(
-                "  SOLVED: {} moves ({} pushes), {} expansions, {:.3}s, {} solution(s)",
-                moves,
-                pushes,
-                result.expansions,
-                result.elapsed.as_secs_f64(),
-                result.solutions.len().max(1)
-            );
-        } else {
+            if human {
+                println!(
+                    "  SOLVED: {} moves ({} pushes), {} expansions, {:.3}s, {} solution(s)",
+                    moves,
+                    pushes,
+                    result.expansions,
+                    result.elapsed.as_secs_f64(),
+                    result.solutions.len().max(1)
+                );
+            }
+        } else if human {
             println!(
                 "  not solved: {} ({} expansions, {:.3}s)",
-                failure_reason,
+                failure_reason.as_deref().unwrap_or("Unknown reason"),
                 result.expansions,
                 result.elapsed.as_secs_f64()
             );
         }
         total_elapsed += level_started.elapsed();
+
+        if !human {
+            results.push(json::SolveResult {
+                index: level_number,
+                title,
+                status: if result.solved { "solved" } else { "unsolved" },
+                failure: failure_reason,
+                moves,
+                pushes,
+                expansions: result.expansions,
+                elapsed_ms: json::millis(level_started.elapsed()),
+                solutions: result
+                    .solutions
+                    .iter()
+                    .map(|solution| json::Solution {
+                        lurd: solution.lurd.clone(),
+                        solved: solution.solved,
+                        moves: solution.moves,
+                        pushes: solution.pushes,
+                    })
+                    .collect(),
+            });
+        }
     }
 
     if !yasc_mode {
@@ -462,20 +649,52 @@ fn run_solver(
             total_elapsed,
         )
         .map_err(|err| format!("{}: {err}", times_path.display()))?;
+    }
+
+    if human {
         println!();
-        println!(
-            "Solved {solved_levels}/{total_levels} levels. Results: {}",
-            times_path.display()
-        );
+        if yasc_mode {
+            println!(
+                "Solved {solved_levels}/{total_levels} levels. Solutions: {}",
+                solution_path.display()
+            );
+        } else {
+            println!(
+                "Solved {solved_levels}/{total_levels} levels. Results: {}",
+                times_path.display()
+            );
+        }
     } else {
-        println!();
-        println!(
-            "Solved {solved_levels}/{total_levels} levels. Solutions: {}",
-            solution_path.display()
-        );
+        json::write(
+            "solve",
+            &json::SolveReport {
+                results,
+                summary: json::SolveSummary {
+                    levels: total_levels,
+                    solved: solved_levels,
+                    moves: total_moves,
+                    pushes: total_pushes,
+                    elapsed_ms: json::millis(total_elapsed),
+                },
+            },
+        )?;
     }
 
     Ok(())
+}
+
+fn failed_result(index: usize, title: &str, reason: &str, elapsed: Duration) -> json::SolveResult {
+    json::SolveResult {
+        index,
+        title: title.to_string(),
+        status: "failed",
+        failure: Some(reason.to_string()),
+        moves: 0,
+        pushes: 0,
+        expansions: 0,
+        elapsed_ms: json::millis(elapsed),
+        solutions: Vec::new(),
+    }
 }
 
 fn record_failure(
@@ -516,57 +735,87 @@ fn epoch_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn run_analysis(args: &Args, raws: Vec<RawLevel>, first: usize, last: usize) -> Result<(), String> {
+fn run_analysis(args: &Args, raws: Vec<RawLevel>, selected: &[usize]) -> Result<(), String> {
+    let human = args.format == Format::Human;
+    let mut results = Vec::new();
+    let mut total_elapsed = Duration::ZERO;
+
     for (index, raw) in raws.into_iter().enumerate() {
-        let level_number = index + 1;
-        if level_number < first || level_number > last {
+        if !selected.contains(&index) {
             continue;
         }
-
-        let clock = SearchClock::new(Some(Duration::from_secs(args.time)), args.max_expansions);
+        let level_number = index + 1;
         let title = raw.title.clone();
+        let started = Instant::now();
+        let clock = SearchClock::new(Some(args.time), args.max_expansions);
         let level = match Level::preprocess(raw) {
             Ok(level) => level,
             Err(err) => {
-                println!("Level {level_number}: {title}");
-                println!("  failed: {}", err.reason());
+                total_elapsed += started.elapsed();
+                if human {
+                    println!("Level {level_number}: {title}");
+                    println!("  failed: {}", err.reason());
+                } else {
+                    results.push(failed_analysis(level_number, title, err.reason()));
+                }
                 continue;
             }
         };
 
         match LevelContext::analyse(level, &clock) {
-            Ok(context) => report_level(level_number, &context, &clock, args.dump),
+            Ok(context) => {
+                let details = analysis_details(&context, &clock);
+                if human {
+                    report_level(level_number, &context, args.dump, &details);
+                } else {
+                    results.push(json::AnalysisResult {
+                        index: level_number,
+                        title,
+                        status: "ok",
+                        failure: None,
+                        analysis: Some(details),
+                    });
+                }
+                total_elapsed += started.elapsed();
+            }
             Err(err) => {
-                println!("Level {level_number}: {title}");
-                println!("  analysis failed: {}", err.reason());
+                total_elapsed += started.elapsed();
+                if human {
+                    println!("Level {level_number}: {title}");
+                    println!("  analysis failed: {}", err.reason());
+                } else {
+                    results.push(failed_analysis(level_number, title, err.reason()));
+                }
             }
         }
     }
 
+    if !human {
+        json::write(
+            "analyse",
+            &json::AnalysisReport {
+                summary: json::AnalysisSummary {
+                    levels: results.len(),
+                    elapsed_ms: json::millis(total_elapsed),
+                },
+                results,
+            },
+        )?;
+    }
     Ok(())
 }
 
-fn select_range(args: &Args, total: usize) -> Result<(usize, usize), String> {
-    if total == 0 {
-        return Err("no levels in file".to_string());
+fn failed_analysis(index: usize, title: String, reason: &str) -> json::AnalysisResult {
+    json::AnalysisResult {
+        index,
+        title,
+        status: "failed",
+        failure: Some(reason.to_string()),
+        analysis: None,
     }
-    if let Some(level) = args.level {
-        if level == 0 || level > total {
-            return Err(format!("level {level} is out of range (1..={total})"));
-        }
-        return Ok((level, level));
-    }
-    let first = args.from.unwrap_or(1);
-    let last = args.to.unwrap_or(total);
-    if first == 0 || last == 0 || first > last || first > total {
-        return Err(format!(
-            "invalid level range {first}..={last} (file has {total} levels)"
-        ));
-    }
-    Ok((first, last.min(total)))
 }
 
-fn report_level(level_number: usize, context: &LevelContext, clock: &SearchClock, dump: bool) {
+fn analysis_details(context: &LevelContext, clock: &SearchClock) -> json::AnalysisDetails {
     let level = &context.level;
     let targets = level
         .initial
@@ -576,44 +825,65 @@ fn report_level(level_number: usize, context: &LevelContext, clock: &SearchClock
         .filter(|cell| **cell & festival_core::constants::TARGET != 0)
         .count();
 
-    println!();
-    println!("Level {level_number}: {}", level.title);
-    println!(
-        "  size: {}x{}, boxes: {}, targets: {}, inner cells: {}, rooms: {}",
-        level.initial.height(),
-        level.initial.width(),
-        level.box_count,
+    json::AnalysisDetails {
+        width: level.initial.width(),
+        height: level.initial.height(),
+        boxes: level.box_count,
         targets,
-        level.index_num(),
-        context.rooms.num
-    );
-    println!(
-        "  hotspots: {} (aborted: {}), forbidden push/pull cells: {}/{}",
-        context.hotspots.score(level, &level.board),
-        context.hotspots.aborted,
-        level
+        inner_cells: level.index_num(),
+        rooms: context.rooms.num,
+        hotspots: context.hotspots.score(level, &level.board),
+        aborted_hotspots: context.hotspots.aborted,
+        forbidden_push: level
             .forbidden_push
             .cells()
             .iter()
             .take(MAX_INNER)
             .filter(|v| **v != 0)
             .count(),
-        level
+        forbidden_pull: level
             .forbidden_pull
             .cells()
             .iter()
             .take(MAX_INNER)
             .filter(|v| **v != 0)
-            .count()
+            .count(),
+        hash: format!("0x{:016x}", level.initial.hash()),
+        elapsed_ms: json::millis(clock.elapsed()),
+    }
+}
+
+fn report_level(
+    level_number: usize,
+    context: &LevelContext,
+    dump: bool,
+    details: &json::AnalysisDetails,
+) {
+    let level = &context.level;
+
+    println!();
+    println!("Level {level_number}: {}", level.title);
+    println!(
+        "  size: {}x{}, boxes: {}, targets: {}, inner cells: {}, rooms: {}",
+        details.width,
+        details.height,
+        details.boxes,
+        details.targets,
+        details.inner_cells,
+        details.rooms
     );
-    println!("  initial hash: 0x{:016x}", level.initial.hash());
+    println!(
+        "  hotspots: {} (aborted: {}), forbidden push/pull cells: {}/{}",
+        details.hotspots, details.aborted_hotspots, details.forbidden_push, details.forbidden_pull
+    );
+    println!("  initial hash: {}", details.hash);
     println!(
         "  push distances: {}x{}, BFS distances: {}x{}, analysis: {:.3} ms",
-        level.index_num(),
-        level.index_num(),
-        level.index_num(),
-        level.index_num(),
-        clock.elapsed().as_secs_f64() * 1000.0
+        details.inner_cells,
+        details.inner_cells,
+        details.inner_cells,
+        details.inner_cells,
+        details.elapsed_ms
     );
 
     if dump {

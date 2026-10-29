@@ -88,8 +88,8 @@ run_solver() {
     ./target/festival-cpp.exe "$levels_file" -from "$first" -to "$last" \
         -time "$seconds" -cores "$cores" "${cpp_alg[@]}" -out_dir "$cpp_dir" \
         < /dev/null > "$cpp_dir/run.log"
-    ./target/release/festival-rs.exe "$levels_file" --from "$first" --to "$last" \
-        --time "$seconds" --cores "$cores" "${rust_alg[@]}" --out_dir "$rust_dir" \
+    ./target/release/festival-rs.exe "$levels_file" --level "$first..$last" \
+        --time "$seconds" --cores "$cores" "${rust_alg[@]}" --out-dir "$rust_dir" \
         > "$rust_dir/run.log"
 
     local cpp_total rust_total

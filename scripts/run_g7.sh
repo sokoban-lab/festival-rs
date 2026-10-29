@@ -136,11 +136,11 @@ run_one() {
         fi
     else
         if [ "$cores" = "1" ]; then
-            pin "$RUST" "$levels" --from "$first" --to "$last" --time "$seconds" \
-                --cores "$cores" --out_dir "$dir" > "$dir/run.log"
+            pin "$RUST" "$levels" --level "${first}..${last}" --time "$seconds" \
+                --cores "$cores" --out-dir "$dir" > "$dir/run.log"
         else
-            "$RUST" "$levels" --from "$first" --to "$last" --time "$seconds" \
-                --cores "$cores" --out_dir "$dir" > "$dir/run.log"
+            "$RUST" "$levels" --level "${first}..${last}" --time "$seconds" \
+                --cores "$cores" --out-dir "$dir" > "$dir/run.log"
         fi
     fi
     end=$(now_ns)
@@ -192,7 +192,7 @@ rss_once() {
         arglist="$levels|-from|$first|-to|$last|-time|$seconds|-cores|$cores|-out_dir|$dir"
     else
         exe="$RUST"
-        arglist="$levels|--from|$first|--to|$last|--time|$seconds|--cores|$cores|--out_dir|$dir"
+        arglist="$levels|--level|${first}..${last}|--time|$seconds|--cores|$cores|--out-dir|$dir"
     fi
     result=$(powershell -NoProfile -ExecutionPolicy Bypass -File "$RSS_PS" \
         -Out "$dir/stdout.log" -Exe "$exe" -ArgList "$arglist" -Csv "$dir/rss.csv")

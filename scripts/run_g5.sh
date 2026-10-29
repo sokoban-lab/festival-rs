@@ -65,7 +65,7 @@ run_solver() {
 
     if [ -n "$last" ]; then
         range_cpp=(-from 1 -to "$last")
-        range_rust=(--from 1 --to "$last")
+        range_rust=(--level "1..$last")
     fi
 
     mkdir -p "$cpp_dir" "$rust_dir"
@@ -79,7 +79,7 @@ run_solver() {
 
     start=$(now_ms)
     ./target/release/festival-rs.exe "$levels_file" "${range_rust[@]}" \
-        --time "$TIME" --cores 1 --alg "$alg" --out_dir "$rust_dir" > "$rust_dir/run.log"
+        --time "$TIME" --cores 1 --alg "$alg" --out-dir "$rust_dir" > "$rust_dir/run.log"
     end=$(now_ms)
     local rust_ms=$((end - start))
 
@@ -137,8 +137,8 @@ sweep_dir=target/g5/sweep-rust7
 mkdir -p "$sweep_dir"
 start=$(now_ms)
 ./target/release/festival-rs.exe levels/corpus/microban.xsb \
-    --from 1 --to "$SWEEP_LAST" --time "$SWEEP_TIME" --cores 1 --alg 7 \
-    --out_dir "$sweep_dir" > "$sweep_dir/run.log" 2>&1
+    --level "1..$SWEEP_LAST" --time "$SWEEP_TIME" --cores 1 --alg 7 \
+    --out-dir "$sweep_dir" > "$sweep_dir/run.log" 2>&1
 end=$(now_ms)
 sweep_ms=$((end - start))
 ./target/release/festival-bench.exe verify-solutions levels/corpus/microban.xsb \
