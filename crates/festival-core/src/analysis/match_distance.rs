@@ -3,7 +3,9 @@
 //! A base score is computed once and the children's scores reuse the Hungarian
 //! cache: each child only changes the row of the moved box.
 
-use crate::analysis::hungarian::{CostMatrix, HungarianCache, HungarianSolution, solve_hungarian};
+use crate::analysis::hungarian::{
+    CostMatrix, HungarianCache, HungarianSolution, solve_hungarian, solve_hungarian_one_row,
+};
 use crate::board::Board;
 use crate::constants::*;
 use crate::deadlock::fixed_boxes::{is_box_2x2_frozen_after_move, is_box_2x2_frozen_at_index};
@@ -32,6 +34,25 @@ fn row_of_box(boxes: &[usize], from: u16) -> usize {
         .expect("internal error")
 }
 
+/// Returns a writable scratch row, restoring the previously changed row to the
+/// cached base first so only one row ever differs from the base matrix.
+fn scratch_row<'a>(
+    scratch: &'a mut CostMatrix,
+    base: &CostMatrix,
+    previous_row: &mut Option<usize>,
+    row: usize,
+) -> &'a mut [i32] {
+    if let Some(previous) = *previous_row {
+        if previous != row {
+            scratch
+                .row_mut(previous)
+                .copy_from_slice(base.row(previous));
+        }
+    }
+    *previous_row = Some(row);
+    scratch.row_mut(row)
+}
+
 /// `compute_match_distance`: distance from boxes to the current targets.
 pub fn compute_match_distance(
     level: &Level,
@@ -56,19 +77,21 @@ pub fn compute_match_distance(
     solve_hungarian(n, &matrix, &mut solution, &mut cache);
     base_score.dist_to_targets = solution.weight;
 
+    let mut scratch = matrix.clone();
+    let mut previous_row = None;
     for (t, m) in moves.iter().enumerate() {
         if m.from == m.to {
             scores[t].dist_to_targets = base_score.dist_to_targets;
             continue;
         }
 
-        let mut child_matrix = matrix.clone();
         let row = row_of_box(&boxes, m.from);
+        let child_row = scratch_row(&mut scratch, &matrix, &mut previous_row, row);
         for (j, &target) in targets.iter().enumerate() {
-            child_matrix.set(row, j, distances.from_to(m.to as usize, target) as i32);
+            child_row[j] = distances.from_to(m.to as usize, target) as i32;
         }
 
-        solve_hungarian(n, &child_matrix, &mut solution, &mut cache);
+        solve_hungarian_one_row(n, &scratch, row, &mut solution, &mut cache);
         scores[t].dist_to_targets = solution.weight;
     }
 }
@@ -125,33 +148,31 @@ pub fn compute_imagine_distance(
     solve_hungarian(n, &matrix, &mut solution, &mut cache);
     base_score.dist_to_imagined = solution.weight;
 
+    let mut scratch = matrix.clone();
+    let mut previous_row = None;
     for (t, m) in moves.iter().enumerate() {
         if m.from == m.to {
             scores[t].dist_to_imagined = base_score.dist_to_imagined;
             continue;
         }
 
-        let mut child_matrix = matrix.clone();
         let row = row_of_box(&boxes, m.from);
+        let child_row = scratch_row(&mut scratch, &matrix, &mut previous_row, row);
         for (j, &target) in targets.iter().enumerate() {
-            child_matrix.set(row, j, distances.from_to(m.to as usize, target) as i32);
+            child_row[j] = distances.from_to(m.to as usize, target) as i32;
         }
 
         if is_box_2x2_frozen_after_move(level, board, m) {
             for (j, &target) in targets.iter().enumerate() {
-                child_matrix.set(
-                    row,
-                    j,
-                    if target == m.to as usize {
-                        0
-                    } else {
-                        INF as i32
-                    },
-                );
+                child_row[j] = if target == m.to as usize {
+                    0
+                } else {
+                    INF as i32
+                };
             }
         }
 
-        solve_hungarian(n, &child_matrix, &mut solution, &mut cache);
+        solve_hungarian_one_row(n, &scratch, row, &mut solution, &mut cache);
         scores[t].dist_to_imagined = solution.weight;
     }
 }
@@ -184,19 +205,21 @@ pub fn compute_base_distance(
     solve_hungarian(n, &matrix, &mut solution, &mut cache);
     base_score.dist_to_targets = solution.weight;
 
+    let mut scratch = matrix.clone();
+    let mut previous_row = None;
     for (t, m) in moves.iter().enumerate() {
         if m.from == m.to {
             scores[t].dist_to_targets = base_score.dist_to_targets;
             continue;
         }
 
-        let mut child_matrix = matrix.clone();
         let row = row_of_box(&boxes, m.from);
+        let child_row = scratch_row(&mut scratch, &matrix, &mut previous_row, row);
         for (j, &base) in bases.iter().enumerate() {
-            child_matrix.set(row, j, distances.from_to(base, m.to as usize) as i32);
+            child_row[j] = distances.from_to(base, m.to as usize) as i32;
         }
 
-        solve_hungarian(n, &child_matrix, &mut solution, &mut cache);
+        solve_hungarian_one_row(n, &scratch, row, &mut solution, &mut cache);
         scores[t].dist_to_targets = solution.weight;
     }
 }
@@ -240,19 +263,21 @@ pub fn compute_rev_distance(
     solve_hungarian(n, &matrix, &mut solution, &mut cache);
     base_score.dist_to_imagined = solution.weight;
 
+    let mut scratch = matrix.clone();
+    let mut previous_row = None;
     for (t, m) in moves.iter().enumerate() {
         if m.from == m.to {
             scores[t].dist_to_imagined = base_score.dist_to_imagined;
             continue;
         }
 
-        let mut child_matrix = matrix.clone();
         let row = row_of_box(&boxes, m.from);
+        let child_row = scratch_row(&mut scratch, &matrix, &mut previous_row, row);
         for (j, &base) in bases.iter().enumerate() {
-            child_matrix.set(row, j, from_to[base * n_indices + m.to as usize] as i32);
+            child_row[j] = from_to[base * n_indices + m.to as usize] as i32;
         }
 
-        solve_hungarian(n, &child_matrix, &mut solution, &mut cache);
+        solve_hungarian_one_row(n, &scratch, row, &mut solution, &mut cache);
         scores[t].dist_to_imagined = solution.weight;
     }
 }

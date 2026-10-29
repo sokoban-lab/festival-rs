@@ -61,7 +61,7 @@ impl CostMatrix {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HungarianSolution {
     pub v: [i32; MAX_BOXES],
     pub u: [i32; MAX_BOXES],
@@ -115,7 +115,6 @@ impl HungarianCache {
 }
 
 struct HungarianData {
-    c: Vec<i32>,
     n: usize,
     v: [i32; MAX_BOXES],
     u: [i32; MAX_BOXES],
@@ -135,7 +134,6 @@ struct HungarianData {
 impl HungarianData {
     fn new(n: usize) -> Self {
         Self {
-            c: vec![0; n * n],
             n,
             v: [0; MAX_BOXES],
             u: [0; MAX_BOXES],
@@ -152,26 +150,14 @@ impl HungarianData {
             u_list_num: 0,
         }
     }
-
-    #[inline]
-    fn cost(&self, i: usize, j: usize) -> i32 {
-        self.c[i * self.n + j]
-    }
 }
 
-fn set_hungarian_problem(matrix: &CostMatrix, hd: &mut HungarianData) {
-    let n = matrix.size();
-    hd.n = n;
-    hd.c.clear();
-    hd.c.extend_from_slice(&matrix.data);
-}
-
-fn init_u_v(hd: &mut HungarianData) {
+fn init_u_v(cost: &CostMatrix, hd: &mut HungarianData) {
     let n = hd.n;
     for i in 0..n {
         let mut min = HUNGARIAN_INF;
         for j in 0..n {
-            min = min.min(hd.cost(i, j));
+            min = min.min(cost.get(i, j));
         }
         hd.v[i] = min;
     }
@@ -179,13 +165,13 @@ fn init_u_v(hd: &mut HungarianData) {
     for j in 0..n {
         let mut min = HUNGARIAN_INF;
         for i in 0..n {
-            min = min.min(hd.cost(i, j) - hd.v[i]);
+            min = min.min(cost.get(i, j) - hd.v[i]);
         }
         hd.u[j] = min;
     }
 }
 
-fn init_match(hd: &mut HungarianData) {
+fn init_match(cost: &CostMatrix, hd: &mut HungarianData) {
     let n = hd.n;
     hd.match_size = 0;
     for i in 0..n {
@@ -198,7 +184,7 @@ fn init_match(hd: &mut HungarianData) {
             if hd.matched_u[j] != -1 {
                 continue;
             }
-            if hd.cost(i, j) == hd.v[i] + hd.u[j] {
+            if cost.get(i, j) == hd.v[i] + hd.u[j] {
                 hd.matched_v[i] = j as i16;
                 hd.matched_u[j] = i as i16;
                 hd.match_size += 1;
@@ -228,7 +214,7 @@ fn init_hungarian_bfs(hd: &mut HungarianData) {
     }
 }
 
-fn bfs_v_side(hd: &mut HungarianData) -> bool {
+fn bfs_v_side(cost: &CostMatrix, hd: &mut HungarianData) -> bool {
     let mut changed = false;
     hd.u_list_num = 0;
 
@@ -238,7 +224,7 @@ fn bfs_v_side(hd: &mut HungarianData) -> bool {
             if hd.visited_u[j] {
                 continue;
             }
-            if hd.v[i] + hd.u[j] == hd.cost(i, j) {
+            if hd.v[i] + hd.u[j] == cost.get(i, j) {
                 hd.visited_u[j] = true;
                 hd.src_of_u[j] = i as i16;
                 hd.u_list[hd.u_list_num] = j as u16;
@@ -272,12 +258,12 @@ fn bfs_u_side(hd: &mut HungarianData) -> bool {
     changed
 }
 
-fn hungarian_bfs(side: usize, hd: &mut HungarianData) {
+fn hungarian_bfs(cost: &CostMatrix, side: usize, hd: &mut HungarianData) {
     let mut side = side;
     loop {
         let res = if side == 0 {
             assert!(hd.v_list_num != 0, "bad hungarian v side");
-            bfs_v_side(hd)
+            bfs_v_side(cost, hd)
         } else {
             assert!(hd.u_list_num != 0, "bad hungarian u side");
             bfs_u_side(hd)
@@ -309,7 +295,7 @@ fn try_to_increase_match(hd: &mut HungarianData) -> bool {
     false
 }
 
-fn add_new_edges(hd: &mut HungarianData) {
+fn add_new_edges(cost: &CostMatrix, hd: &mut HungarianData) {
     let mut min = HUNGARIAN_INF;
     let n = hd.n;
     hd.u_list_num = 0;
@@ -322,7 +308,7 @@ fn add_new_edges(hd: &mut HungarianData) {
             if hd.visited_u[j] {
                 continue;
             }
-            let delta = hd.cost(i, j) - hd.v[i] - hd.u[j];
+            let delta = cost.get(i, j) - hd.v[i] - hd.u[j];
             if delta < min {
                 min = delta;
             }
@@ -347,7 +333,7 @@ fn add_new_edges(hd: &mut HungarianData) {
             if !hd.visited_v[i] {
                 continue;
             }
-            if hd.v[i] + hd.u[j] == hd.cost(i, j) {
+            if hd.v[i] + hd.u[j] == cost.get(i, j) {
                 hd.visited_u[j] = true;
                 hd.src_of_u[j] = i as i16;
                 break;
@@ -360,14 +346,14 @@ fn add_new_edges(hd: &mut HungarianData) {
     }
 }
 
-fn verify_hungarian_invariant(hd: &HungarianData) {
-    debug_assert!(invariant_holds(hd));
+fn verify_hungarian_invariant(cost: &CostMatrix, hd: &HungarianData) {
+    debug_assert!(invariant_holds(cost, hd));
 }
 
-fn invariant_holds(hd: &HungarianData) -> bool {
+fn invariant_holds(cost: &CostMatrix, hd: &HungarianData) -> bool {
     for i in 0..hd.n {
         for j in 0..hd.n {
-            if hd.v[i] + hd.u[j] > hd.cost(i, j) {
+            if hd.v[i] + hd.u[j] > cost.get(i, j) {
                 return false;
             }
         }
@@ -375,31 +361,31 @@ fn invariant_holds(hd: &HungarianData) -> bool {
     true
 }
 
-fn add_edge_to_match(hd: &mut HungarianData) {
+fn add_edge_to_match(cost: &CostMatrix, hd: &mut HungarianData) {
     init_hungarian_bfs(hd);
-    hungarian_bfs(0, hd);
+    hungarian_bfs(cost, 0, hd);
 
     loop {
         if try_to_increase_match(hd) {
             return;
         }
-        add_new_edges(hd);
-        hungarian_bfs(1, hd);
+        add_new_edges(cost, hd);
+        hungarian_bfs(cost, 1, hd);
     }
 }
 
-fn verify_hungarian_solution(hd: &HungarianData) {
-    verify_hungarian_invariant(hd);
-    debug_assert!(solution_holds(hd));
+fn verify_hungarian_solution(cost: &CostMatrix, hd: &HungarianData) {
+    verify_hungarian_invariant(cost, hd);
+    debug_assert!(solution_holds(cost, hd));
 }
 
-fn solution_holds(hd: &HungarianData) -> bool {
+fn solution_holds(cost: &CostMatrix, hd: &HungarianData) -> bool {
     for i in 0..hd.n {
         let j = hd.matched_v[i];
         if j == -1 || hd.matched_u[j as usize] != i as i16 {
             return false;
         }
-        if hd.v[i] + hd.u[j as usize] != hd.cost(i, j as usize) {
+        if hd.v[i] + hd.u[j as usize] != cost.get(i, j as usize) {
             return false;
         }
     }
@@ -410,22 +396,22 @@ fn is_match_full(hd: &HungarianData) -> bool {
     (0..hd.n).all(|i| hd.matched_v[i] != -1)
 }
 
-fn do_hungarian_iterations(hd: &mut HungarianData) {
+fn do_hungarian_iterations(cost: &CostMatrix, hd: &mut HungarianData) {
     while !is_match_full(hd) {
-        add_edge_to_match(hd);
-        verify_hungarian_invariant(hd);
+        add_edge_to_match(cost, hd);
+        verify_hungarian_invariant(cost, hd);
     }
-    verify_hungarian_solution(hd);
+    verify_hungarian_solution(cost, hd);
 }
 
-fn set_hungarian_solution(sol: &mut HungarianSolution, hd: &HungarianData) {
+fn set_hungarian_solution(cost: &CostMatrix, sol: &mut HungarianSolution, hd: &HungarianData) {
     sol.weight = 0;
     for i in 0..hd.n {
         sol.match_v[i] = hd.matched_v[i];
         sol.match_u[i] = hd.matched_u[i];
         sol.u[i] = hd.u[i];
         sol.v[i] = hd.v[i];
-        sol.weight += hd.cost(i, hd.matched_v[i] as usize);
+        sol.weight += cost.get(i, hd.matched_v[i] as usize);
     }
 }
 
@@ -464,7 +450,7 @@ fn did_one_row_change(matrix: &CostMatrix, hc: &HungarianCache) -> CacheState {
     }
 }
 
-fn init_from_prev(row: usize, hd: &mut HungarianData, hc: &HungarianCache) {
+fn init_from_prev(row: usize, cost: &CostMatrix, hd: &mut HungarianData, hc: &HungarianCache) {
     let n = hc.prev_n as usize;
     hd.n = n;
     for i in 0..n {
@@ -479,18 +465,17 @@ fn init_from_prev(row: usize, hd: &mut HungarianData, hc: &HungarianCache) {
 
     let mut min = HUNGARIAN_INF;
     for i in 0..n {
-        min = min.min(hd.cost(row, i) - hd.u[i]);
+        min = min.min(cost.get(row, i) - hd.u[i]);
     }
     hd.v[row] = min;
 
-    verify_hungarian_invariant(hd);
+    verify_hungarian_invariant(cost, hd);
 }
 
-fn save_prev_data(sol: &HungarianSolution, hd: &HungarianData, hc: &mut HungarianCache) {
-    let n = hd.n;
-    hc.prev_n = n as isize;
+fn save_prev_data(sol: &HungarianSolution, cost: &CostMatrix, hc: &mut HungarianCache) {
+    hc.prev_n = cost.size() as isize;
     hc.prev_c.clear();
-    hc.prev_c.extend_from_slice(&hd.c);
+    hc.prev_c.extend_from_slice(&cost.data);
     hc.prev_sol = *sol;
 }
 
@@ -504,30 +489,62 @@ pub fn solve_hungarian(
     assert_eq!(n, cost.size());
     assert!(n <= MAX_BOXES, "hungarian size overflow");
 
-    let mut hd = HungarianData::new(n);
-    set_hungarian_problem(cost, &mut hd);
-
     let cache_state = did_one_row_change(cost, hc);
     let fresh = matches!(cache_state, CacheState::Rebuild);
-    match cache_state {
-        CacheState::Rebuild => {
-            init_u_v(&mut hd);
-            init_match(&mut hd);
-        }
-        CacheState::Same => {
-            *sol = hc.prev_sol;
-            return;
-        }
-        CacheState::OneRow(row) => init_from_prev(row, &mut hd, hc),
+    if matches!(cache_state, CacheState::Same) {
+        *sol = hc.prev_sol;
+        return;
     }
 
-    do_hungarian_iterations(&mut hd);
-    set_hungarian_solution(sol, &hd);
+    let mut hd = HungarianData::new(n);
+    match cache_state {
+        CacheState::Rebuild => {
+            init_u_v(cost, &mut hd);
+            init_match(cost, &mut hd);
+        }
+        CacheState::OneRow(row) => init_from_prev(row, cost, &mut hd, hc),
+        CacheState::Same => unreachable!(),
+    }
+
+    do_hungarian_iterations(cost, &mut hd);
+    set_hungarian_solution(cost, sol, &hd);
 
     // Only a freshly built problem is cached; variations reuse the old entry.
     if fresh {
-        save_prev_data(sol, &hd, hc);
+        save_prev_data(sol, cost, hc);
     }
+}
+
+/// Solves one child whose cost matrix equals the cached matrix except in
+/// `changed_row`. The caller reuses a scratch matrix instead of cloning the
+/// full base matrix for every child.
+pub(crate) fn solve_hungarian_one_row(
+    n: usize,
+    cost: &CostMatrix,
+    changed_row: usize,
+    sol: &mut HungarianSolution,
+    hc: &mut HungarianCache,
+) {
+    assert_eq!(n, cost.size());
+    assert_eq!(hc.prev_n, n as isize);
+    assert!(n <= MAX_BOXES, "hungarian size overflow");
+
+    debug_assert!(matches!(
+        did_one_row_change(cost, hc),
+        CacheState::OneRow(row) if row == changed_row
+    ));
+
+    let row = cost.row(changed_row);
+    let prev_row = &hc.prev_c[changed_row * n..(changed_row + 1) * n];
+    if row == prev_row {
+        *sol = hc.prev_sol;
+        return;
+    }
+
+    let mut hd = HungarianData::new(n);
+    init_from_prev(changed_row, cost, &mut hd, hc);
+    do_hungarian_iterations(cost, &mut hd);
+    set_hungarian_solution(cost, sol, &hd);
 }
 
 #[cfg(test)]
@@ -639,5 +656,48 @@ mod tests {
         matrix.set(1, 2, 0);
         solve_hungarian(3, &matrix, &mut sol, &mut cache);
         assert_eq!(sol.weight, brute_force(&matrix));
+    }
+
+    #[test]
+    fn one_row_update_matches_full_solve() {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        for n in 1..=8 {
+            for _ in 0..20 {
+                let mut base = CostMatrix::new(n);
+                for i in 0..n {
+                    for j in 0..n {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1_442_695_040_888_963_407);
+                        base.set(i, j, ((state >> 33) % 31) as i32);
+                    }
+                }
+
+                let mut full_cache = HungarianCache::new();
+                let mut row_cache = HungarianCache::new();
+                let mut full_sol = HungarianSolution::default();
+                let mut row_sol = HungarianSolution::default();
+                solve_hungarian(n, &base, &mut full_sol, &mut full_cache);
+                solve_hungarian(n, &base, &mut row_sol, &mut row_cache);
+                assert_eq!(full_sol, row_sol);
+
+                let mut scratch = base.clone();
+                for row in 0..n {
+                    if row > 0 {
+                        scratch.row_mut(row - 1).copy_from_slice(base.row(row - 1));
+                    }
+                    for j in 0..n {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1_442_695_040_888_963_407);
+                        scratch.set(row, j, ((state >> 33) % 31) as i32);
+                    }
+
+                    solve_hungarian(n, &scratch, &mut full_sol, &mut full_cache);
+                    solve_hungarian_one_row(n, &scratch, row, &mut row_sol, &mut row_cache);
+                    assert_eq!(full_sol, row_sol, "n={n}, row={row}");
+                }
+            }
+        }
     }
 }
