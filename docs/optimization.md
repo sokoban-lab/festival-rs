@@ -45,3 +45,9 @@ shift 边可逐对 O(1) 判定；唯一的调用点 `bfs::mark_connectivities_ar
 5,466 pushes，Microban 155/155 为 22,486 / 5,920，与基线一致；`solutions.sok`
 逐字节相同（仅时间戳），`--validate` 全部重放通过。原始计时与校验和见
 [`reference/BASELINE.md`](../reference/BASELINE.md#biconnected-shift-follow-up-2026-10-29)。
+
+**v0.1.1 全量复审**（同日新旧二进制，1 核）：XSokoban 90 关 160.6 → 102.1 s
+（−36.4%）。第 1–28、30–90 关的解与步数不变，只有第 29 关从 1277 / 298 变为
+705 / 190：该关策略 A 的 75 s 墙钟配额（600 s 的 1/8）在新版内足够解出，旧版与
+C++ 则超时后改用后续策略。因此“`solutions.sok` 逐字节相同”只对不受墙钟配额截断的
+关卡成立；搜索本身（移位矩阵）的等价性仍由差分测试覆盖。

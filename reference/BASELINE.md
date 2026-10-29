@@ -794,3 +794,47 @@ cdd62a76e69db37196d21e8421ae842da6314bb90d1d67a0aef834d9181fdcef *target/ab/val-
   under Linux would remove the workaround.
 - Single-core timings require CPU pinning on this hybrid host; unpinned runs
   are not comparable.
+
+## v0.1.1 benchmark (2026-10-29)
+
+End-to-end rerun of the `docs/benchmarks.md` protocol after the biconnected
+shift change, on the same host as the 0.1.0 numbers. Single-core runs pin
+logical CPU 0 (`start /affinity 1`); each set runs two rounds with the solver
+order swapped. Eight-core Microban uses 60 s per level, three runs.
+
+| Run | Microban 1-155, 1 core | Microban 1-155, 8 cores | XSokoban 1-90, 1 core |
+|---|---|---|---|
+| 1 | Rust 8,348 ms / C++ 18,852 ms | Rust 8,172 ms / C++ 64,373 ms | Rust 102,057 ms / C++ 181,424 ms |
+| 2 | Rust 8,714 ms / C++ 19,290 ms | Rust 9,419 ms / C++ 65,170 ms | Rust 106,587 ms / C++ 182,115 ms |
+| 3 | — | Rust 9,350 ms / C++ 64,275 ms | — |
+| Best ratio | 0.443 | 0.127 | 0.563 |
+
+Peak working sets (bytes): Microban one core 283,856,896 vs 771,072,000;
+Microban eight cores 1,816,702,976 vs 5,957,652,480; XSokoban batch
+338,481,152 vs 896,765,952; XSokoban level 29 272,764,928 vs 919,715,840.
+
+Microban reproduces 22,486 moves / 5,920 pushes (Rust) against 22,460 / 5,912
+(C++), and every solution replays with `festival-bench verify-solutions`
+(155/155 and 90/90, 0 invalid). XSokoban levels 1-28 and 30-90 are unchanged
+from 0.1.0; only level 29 differs: 705 moves / 190 pushes now versus
+1,277 / 298 for C++ and the 0.1.0 binary. Level 29 takes 101 s with a build
+from `e530e92` and 54 s with 0.1.1, so strategy A now finishes inside its
+75 s slice (600 s / 8) instead of yielding to later strategies. The single
+solve result therefore depends on wall-clock strategy budgets, not on a
+different shift matrix; levels that solve inside one budget are identical.
+
+Session drift: C++ Microban was about 12% slower than on the 0.1.0 day while
+C++ XSokoban was about 7% faster, so only within-session ratios are compared.
+
+Binaries: Rust `199cc73862816d891239535caffe602da3201d4e52e513a091e0109914882fab`,
+C++ `16f46d56850fd7d16d0075e85a6cd4bfd29551979ad6d916a3fe25081267d2f2`.
+The 0.1.0 commit `e530e92` rebuilt today produced 94,231 / 28,709 in 160.6 s
+and serves as the same-session pre-change reference.
+
+```text
+8cc56b8d1a72b5b8786548dbee24be6043cdba2ead6e9e11f8eb1decd7d3f4a0 *target/bench-011/results.txt
+ec1e0c431bd50a7088b4c3bd8aa7140b4abd092f467473cf4808abf95229d47b *target/bench-011/xs-old/times.txt
+9a23236af1f085b54d17465a95912aa9bd57021f4476f1e006dcd757e714ed91 *target/bench-011/xs-old/solutions.sok
+4ab68f46b94147a45993d871bbbbf9e555bb73a84dacd43733c12bb7b70a698c *target/bench-011/mb-rust-r1/solutions.sok
+a567ae6ac1cfa077515a6efa0b80e8088c9780709a3401dcb9bc995ec225a81a *target/bench-011/xs-rust-r2/solutions.sok
+```
