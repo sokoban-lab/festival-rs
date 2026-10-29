@@ -134,37 +134,6 @@ pub fn mark_connectivities(level: &Level, board: &Board, dist: &mut [u32]) -> us
     components
 }
 
-pub fn mark_connectivities_around_place(
-    level: &Level,
-    board: &Board,
-    dist: &mut [u32],
-    start_y: usize,
-    start_x: usize,
-) {
-    init_dist(dist, board.width(), board.height());
-
-    for color in 0..4u32 {
-        let y = start_y as isize + DELTA_Y[color as usize];
-        let x = start_x as isize + DELTA_X[color as usize];
-        if y < 0 || x < 0 {
-            continue;
-        }
-        let (y, x) = (y as usize, x as usize);
-        if !board.in_bounds(y, x) || !level.is_inner(y, x) {
-            continue;
-        }
-        let idx = flat(y, x);
-        if dist[idx] != INF {
-            continue;
-        }
-        if board.cell(y, x) & OCCUPIED != 0 {
-            continue;
-        }
-
-        bfs_mark(board, dist, y, x, color);
-    }
-}
-
 pub fn get_connectivity_sizes(dist: &[u32], n: usize, sizes: &mut [usize]) {
     sizes[..n].fill(0);
     for &value in dist.iter().take(MAX_INNER) {

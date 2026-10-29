@@ -40,6 +40,7 @@ pub struct Graph {
     pub vertices: Vec<Vertex>,
     pub current_impossible: Board,
     pub vertices_num: usize,
+    shift_blocks: ShiftBlocks,
 }
 
 impl Graph {
@@ -50,6 +51,7 @@ impl Graph {
             current_impossible: Board::new(level.initial.width(), level.initial.height())
                 .expect("level dimensions"),
             vertices_num,
+            shift_blocks: ShiftBlocks::default(),
         }
     }
 
@@ -60,6 +62,7 @@ impl Graph {
             current_impossible: Board::new(level.initial.width(), level.initial.height())
                 .expect("level dimensions"),
             vertices_num: 0,
+            shift_blocks: ShiftBlocks::default(),
         }
     }
 
@@ -115,8 +118,8 @@ impl Graph {
             vertex.shift = [0; 4];
         }
 
-        let mut zones = [INF; MAX_INNER];
-        let mut temp = *board;
+        self.shift_blocks.compute(level, board);
+        let edge_block = &self.shift_blocks.edge_block;
 
         for i in 0..level.index_num() {
             let (y, x) = level.coord(i);
@@ -124,38 +127,28 @@ impl Graph {
                 continue;
             }
 
-            temp.set(y, x, board.cell(y, x) | BOX);
-            bfs::mark_connectivities_around_place(level, &temp, &mut zones, y, x);
-            temp.set(y, x, board.cell(y, x));
-
             for from in 0..4 {
                 if !self.vertices[i * 4 + from].active {
                     continue;
                 }
-                let from_y = y as isize + DELTA_Y[from];
-                let from_x = x as isize + DELTA_X[from];
-                if from_y < 0 || from_x < 0 {
+                let Some(from_index) = neighbor_index(level, board, i, from) else {
                     continue;
-                }
-                let from_idx = Board::flat_index(from_y as usize, from_x as usize);
-                if zones[from_idx] == INF {
-                    continue;
-                }
-                for to in 0..4 {
-                    if to == from || !self.vertices[i * 4 + to].active {
+                };
+                let from_edge = from_index * 4 + ((from + 2) & 3);
+                for to in (from + 1)..4 {
+                    if !self.vertices[i * 4 + to].active {
                         continue;
                     }
-                    let to_y = y as isize + DELTA_Y[to];
-                    let to_x = x as isize + DELTA_X[to];
-                    if to_y < 0 || to_x < 0 {
+                    let Some(to_index) = neighbor_index(level, board, i, to) else {
                         continue;
-                    }
-                    let to_idx = Board::flat_index(to_y as usize, to_x as usize);
-                    if zones[to_idx] == INF {
-                        continue;
-                    }
-                    if zones[from_idx] == zones[to_idx] {
+                    };
+                    let to_edge = to_index * 4 + ((to + 2) & 3);
+                    // Two sides of a cell stay connected once the cell is
+                    // occupied by a box exactly when both edges belong to the
+                    // same biconnected block.
+                    if edge_block[from_edge] == edge_block[to_edge] {
                         self.vertices[i * 4 + from].shift[to] = (i * 4 + to) as u32;
+                        self.vertices[i * 4 + to].shift[from] = (i * 4 + from) as u32;
                     }
                 }
             }
@@ -827,6 +820,264 @@ impl Graph {
                     }
                 }
             }
+        }
+    }
+}
+
+const NO_PARENT: u16 = u16::MAX;
+
+/// Edge-to-block labelling used by [`Graph::init_shift`].
+///
+/// A single Tarjan pass labels every directed edge of the free-cell graph with
+/// the id of its biconnected block. Two sides of a cell stay connected once a
+/// box occupies the cell exactly when both incident edges share a block, so the
+/// per-cell component BFS is replaced by O(1) lookups.
+#[derive(Debug, Default)]
+struct ShiftBlocks {
+    depth: Vec<u16>,
+    low: Vec<u16>,
+    parent: Vec<u16>,
+    parent_dir: Vec<u8>,
+    edge_block: Vec<u16>,
+    edge_stack: Vec<u32>,
+    dfs_stack: Vec<(u16, u8)>,
+}
+
+impl ShiftBlocks {
+    fn compute(&mut self, level: &Level, board: &Board) {
+        let n = level.index_num();
+        self.depth.clear();
+        self.depth.resize(n, 0);
+        self.low.resize(n, 0);
+        self.parent.resize(n, NO_PARENT);
+        self.parent_dir.resize(n, 0);
+        self.edge_block.clear();
+        self.edge_block.resize(n * 4, 0);
+        self.edge_stack.clear();
+        self.dfs_stack.clear();
+
+        let mut time = 0u16;
+        let mut block = 0u16;
+
+        for root in 0..n {
+            let (root_y, root_x) = level.coord(root);
+            if self.depth[root] != 0 || board.cell(root_y, root_x) & OCCUPIED != 0 {
+                continue;
+            }
+
+            time += 1;
+            self.depth[root] = time;
+            self.low[root] = time;
+            self.parent[root] = NO_PARENT;
+            self.dfs_stack.push((root as u16, 0));
+
+            while let Some(&(u, dir)) = self.dfs_stack.last() {
+                let u = u as usize;
+                if dir < 4 {
+                    self.dfs_stack.last_mut().expect("frame").1 += 1;
+                    let Some(v) = neighbor_index(level, board, u, dir as usize) else {
+                        continue;
+                    };
+                    let (v_y, v_x) = level.coord(v);
+                    if board.cell(v_y, v_x) & OCCUPIED != 0 {
+                        continue;
+                    }
+
+                    if self.depth[v] == 0 {
+                        time += 1;
+                        self.depth[v] = time;
+                        self.low[v] = time;
+                        self.parent[v] = u as u16;
+                        self.parent_dir[v] = dir;
+                        self.edge_stack.push((u * 4 + dir as usize) as u32);
+                        self.dfs_stack.push((v as u16, 0));
+                    } else if self.parent[u] != v as u16 && self.depth[v] < self.depth[u] {
+                        self.edge_stack.push((u * 4 + dir as usize) as u32);
+                        if self.depth[v] < self.low[u] {
+                            self.low[u] = self.depth[v];
+                        }
+                    }
+                } else {
+                    self.dfs_stack.pop();
+                    let parent = self.parent[u];
+                    if parent == NO_PARENT {
+                        continue;
+                    }
+                    let parent = parent as usize;
+                    if self.low[u] < self.low[parent] {
+                        self.low[parent] = self.low[u];
+                    }
+                    if self.low[u] < self.depth[parent] {
+                        continue;
+                    }
+
+                    block += 1;
+                    let target = (parent * 4 + self.parent_dir[u] as usize) as u32;
+                    loop {
+                        let edge = self.edge_stack.pop().expect("edge stack underflow");
+                        let edge_from = (edge / 4) as usize;
+                        let edge_dir = (edge % 4) as usize;
+                        self.edge_block[edge as usize] = block;
+                        let edge_to = neighbor_index(level, board, edge_from, edge_dir)
+                            .expect("edge endpoint is walkable");
+                        self.edge_block[edge_to * 4 + ((edge_dir + 2) & 3)] = block;
+                        if edge == target {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn neighbor_index(level: &Level, board: &Board, index: usize, dir: usize) -> Option<usize> {
+    let (y, x) = level.coord(index);
+    let ny = y as isize + DELTA_Y[dir];
+    let nx = x as isize + DELTA_X[dir];
+    if ny < 0 || nx < 0 {
+        return None;
+    }
+    let (ny, nx) = (ny as usize, nx as usize);
+    if !board.in_bounds(ny, nx) {
+        return None;
+    }
+    level.index_at(ny, nx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::sok::parse_levels;
+
+    fn level(text: &str) -> Level {
+        Level::preprocess(parse_levels(text).remove(0)).unwrap()
+    }
+
+    fn connected_without(
+        level: &Level,
+        board: &Board,
+        from: usize,
+        to: usize,
+        blocked: usize,
+    ) -> bool {
+        let mut seen = [false; MAX_INNER];
+        let mut queue = vec![from];
+        seen[from] = true;
+        while let Some(u) = queue.pop() {
+            if u == to {
+                return true;
+            }
+            for dir in 0..4 {
+                let Some(v) = neighbor_index(level, board, u, dir) else {
+                    continue;
+                };
+                if v == blocked || seen[v] {
+                    continue;
+                }
+                let (v_y, v_x) = level.coord(v);
+                if board.cell(v_y, v_x) & OCCUPIED != 0 {
+                    continue;
+                }
+                seen[v] = true;
+                queue.push(v);
+            }
+        }
+        false
+    }
+
+    fn is_walkable(level: &Level, board: &Board, index: usize) -> bool {
+        let (y, x) = level.coord(index);
+        board.cell(y, x) & OCCUPIED == 0
+    }
+
+    /// Brute-force reference: one BFS per side pair with the cell occupied.
+    fn reference_shifts(level: &Level, board: &Board) -> Vec<[u32; 4]> {
+        let n = level.index_num();
+        let mut shifts = vec![[0u32; 4]; n * 4];
+        for i in 0..n {
+            let (y, x) = level.coord(i);
+            if board.cell(y, x) & OCCUPIED != 0 {
+                continue;
+            }
+            for from in 0..4 {
+                let Some(from_index) = neighbor_index(level, board, i, from) else {
+                    continue;
+                };
+                if !is_walkable(level, board, from_index) {
+                    continue;
+                }
+                for to in (from + 1)..4 {
+                    let Some(to_index) = neighbor_index(level, board, i, to) else {
+                        continue;
+                    };
+                    if !is_walkable(level, board, to_index) {
+                        continue;
+                    }
+                    if connected_without(level, board, from_index, to_index, i) {
+                        shifts[i * 4 + from][to] = (i * 4 + to) as u32;
+                        shifts[i * 4 + to][from] = (i * 4 + from) as u32;
+                    }
+                }
+            }
+        }
+        shifts
+    }
+
+    fn graph_shifts(level: &Level, board: &Board) -> Vec<[u32; 4]> {
+        let mut graph = Graph::new(level);
+        graph.build(level, board, false);
+        graph.vertices.iter().map(|vertex| vertex.shift).collect()
+    }
+
+    fn assert_shifts_match(level: &Level, board: &Board, context: &str) {
+        let expected = reference_shifts(level, board);
+        let actual = graph_shifts(level, board);
+        for (i, (expected, actual)) in expected.iter().zip(&actual).enumerate() {
+            assert_eq!(expected, actual, "{context}: cell {} dir {}", i / 4, i % 4);
+        }
+    }
+
+    fn empty_board(text: &str) -> (Level, Board) {
+        let level = level(text);
+        let mut board = level.initial;
+        board.clear_boxes_inplace();
+        (level, board)
+    }
+
+    #[test]
+    fn shift_matches_bruteforce_on_small_levels() {
+        for text in [
+            "#######\n#@ $ .#\n#######\n",
+            "#########\n#@      #\n#  $    #\n#    .  #\n#########\n",
+            "#######\n#@    #\n# # # #\n#  $  #\n#  .  #\n#######\n",
+            "########\n#@     #\n#  ##  #\n# #  # #\n#  $ . #\n########\n",
+            "#########\n#@  #   #\n#   #   #\n#  $#   #\n#   # . #\n#########\n",
+            "##########\n#@   #   #\n#    #   #\n#  ###   #\n#        #\n#  $   . #\n##########\n",
+        ] {
+            let (level, board) = empty_board(text);
+            assert_shifts_match(&level, &board, text);
+        }
+    }
+
+    #[test]
+    fn shift_matches_bruteforce_with_extra_walls() {
+        let (level, base) = empty_board(
+            "#############\n#@          #\n#           #\n#           #\n#     $     #\n#           #\n#           #\n#          .#\n#############\n",
+        );
+        let height = base.height();
+        let width = base.width();
+        let mut state = 0x1234_5678u32;
+        for round in 0..300 {
+            let mut board = base;
+            for _ in 0..12 {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let y = 1 + state as usize % (height - 2);
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let x = 1 + state as usize % (width - 2);
+                board.set(y, x, WALL);
+            }
+            assert_shifts_match(&level, &board, &format!("round {round}"));
         }
     }
 }
