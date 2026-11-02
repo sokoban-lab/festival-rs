@@ -1,6 +1,6 @@
 # festival-rs
 
-An AI-assisted Rust port of Festival 3.1, the Sokoban solver by Yaron Shoham.
+An AI-assisted Rust port of [Festival](https://festival-solver.site/).
 
 ## Usage
 
@@ -46,6 +46,4 @@ Times and RSS cover the full level-set batch; absolute times drift with host loa
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT), at your option.
 
-festival-rs is a Rust port of Festival 3.1, copyright 2018–2022 Yaron Shoham.
-The
-original source asks users to credit the program and its author; that credit is retained in this README. Level sets keep their own licenses; see [`levels/README.md`](levels/README.md).
+The original Festival was developed by Yaron Shoham, copyright 2018–2022. Level sets keep their own licenses; see [`levels/README.md`](levels/README.md).
