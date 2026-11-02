@@ -137,8 +137,25 @@ fn strategy_config(
         time_limit,
         max_expansions: config.max_expansions,
         log_max_nodes: config.log_max_nodes,
+        dragonfly_max_nodes: dragonfly_max_nodes(config),
         save_best: config.save_best,
         cancel: Some(Arc::clone(cancel)),
+    }
+}
+
+/// C++ `init_dragonfly`: 2^22 nodes per core count, shifted by `-extra_mem`.
+fn dragonfly_max_nodes(config: &SchedulerConfig) -> usize {
+    let shift = 22 + config.cores.trailing_zeros() as i32 + config.log_max_nodes as i32 - 23;
+    if shift <= 0 { 1 } else { 1usize << shift }
+}
+
+/// C++ `allocate_search_trees` gives the Dragonfly core a smaller tree; that
+/// core falls back to the same tree for its forward phase.
+fn worker_log_max_nodes(config: &SchedulerConfig, index: usize) -> u32 {
+    if config.cores == 8 && index == 7 {
+        config.log_max_nodes.saturating_sub(3).max(4)
+    } else {
+        config.log_max_nodes
     }
 }
 
@@ -173,8 +190,8 @@ struct WorkerState {
     helper: Helper,
 }
 
-fn worker_state(ctx: &LevelContext, config: &SchedulerConfig) -> Result<WorkerState> {
-    let mut tree = Tree::new_with_level(config.log_max_nodes, &ctx.level)?;
+fn worker_state(ctx: &LevelContext, log_max_nodes: u32) -> Result<WorkerState> {
+    let mut tree = Tree::new_with_level(log_max_nodes, &ctx.level)?;
     tree.prepare_deadlock(ctx)?;
     Ok(WorkerState {
         tree,
@@ -203,17 +220,17 @@ impl Solver {
             self.log_max_nodes = config.log_max_nodes;
         }
         let mut prepared = Vec::with_capacity(config.cores);
-        for mut worker in std::mem::take(&mut self.workers)
-            .into_iter()
-            .take(config.cores)
-        {
-            if worker.tree.prepare_for_level(config.log_max_nodes, ctx)? {
-                worker.helper.reset();
-                prepared.push(worker);
+        let mut reused = std::mem::take(&mut self.workers).into_iter();
+        for index in 0..config.cores {
+            let log_max_nodes = worker_log_max_nodes(config, index);
+            if let Some(mut worker) = reused.next() {
+                if worker.tree.prepare_for_level(log_max_nodes, ctx)? {
+                    worker.helper.reset();
+                    prepared.push(worker);
+                    continue;
+                }
             }
-        }
-        while prepared.len() < config.cores {
-            prepared.push(worker_state(ctx, config)?);
+            prepared.push(worker_state(ctx, log_max_nodes)?);
         }
         self.workers = prepared;
         Ok(())

@@ -27,6 +27,8 @@ pub struct StrategyConfig {
     pub time_limit: Duration,
     pub max_expansions: Option<u64>,
     pub log_max_nodes: u32,
+    /// Dragonfly node cap (`dragonfly_max_nodes` in C++).
+    pub dragonfly_max_nodes: usize,
     pub save_best: bool,
     /// Shared `any_core_solved` flag for multi-core scheduling.
     pub cancel: Option<Arc<AtomicBool>>,
@@ -38,6 +40,7 @@ impl Default for StrategyConfig {
             time_limit: Duration::from_secs(600),
             max_expansions: None,
             log_max_nodes: 20,
+            dragonfly_max_nodes: 1 << 22,
             save_best: false,
             cancel: None,
         }
@@ -178,6 +181,7 @@ pub fn solve_strategy_into(
         let dragonfly_budget = Duration::from_secs(backward_budget.as_secs().saturating_mul(3));
         let config = DragonflyConfig {
             time_limit: Some(dragonfly_budget),
+            max_nodes: config.dragonfly_max_nodes,
             cancel: config.cancel.clone(),
             ..DragonflyConfig::default()
         };

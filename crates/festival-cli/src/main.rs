@@ -30,7 +30,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const SOLVER_NAME: &str = "Festival 3.1";
 const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
-const DEFAULT_TREE_LOG_SIZE: u32 = 20;
+const DEFAULT_TREE_LOG_SIZE: u32 = 23;
 const MIN_TREE_LOG_SIZE: u32 = 14;
 const MAX_TREE_LOG_SIZE: u32 = 23;
 /// Estimated process memory per tree node, including per-worker caches.
@@ -122,7 +122,7 @@ struct Args {
     threads: Option<usize>,
 
     /// Approximate memory budget for the search, e.g. `512M` or `2G`; split
-    /// across worker threads. A bare number is MiB. Defaults to about 256 MiB
+    /// across worker threads. A bare number is MiB. Defaults to about 2 GiB
     /// per worker.
     #[arg(
         short,

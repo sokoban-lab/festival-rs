@@ -11,8 +11,8 @@ festival-rs <path/to/xsb>
 # Solve levels 1-20 with a 60 s budget.
 festival-rs <path/to/xsb> --level 1..20 --timeout 60
 
-# Give a single worker a larger memory budget.
-festival-rs <path/to/xsb> --threads 1 --memory 2G
+# Lower a single worker's memory budget.
+festival-rs <path/to/xsb> --threads 1 --memory 512M
 
 # Print static analysis with the board and room dump.
 festival-rs <path/to/xsb> --analyse --dump
@@ -36,10 +36,9 @@ Times and RSS cover the full level-set batch; absolute times drift with host loa
 
 ## Known Differentials
 
-- `--algorithm` is honored for every thread count; C++ 3.1 ignores `-alg` when `-cores > 1`.
-- The CLI requires an explicit level set, has no default `XSokoban`, and rejects legacy single-dash options, renamed 0.1.x options (`--time`, `--alg`, `--cores`, `--out-dir`), and `--from`/`--to` with a replacement hint.
 - Algorithm H (Dragonfly + NAIVE) matches the C++ solve set with a 0.3% move and push quality difference; algorithms A and G take different solutions on a few levels while solving the same set.
 - Thread selection uses 1/2/4/8 rounded down from the host CPU count; C++'s RAM-based thresholds are not applied.
+- The CLI interface is completely different.
 
 ## License
 
