@@ -7,14 +7,102 @@
 
 | 版本  |       日期 |      提交 | Microban 单核 | Microban 8 核 | XSokoban 单核 |   峰值 RSS |
 | ----- | ---------: | --------: | ------------: | ------------: | ------------: | ---------: |
+| 0.1.3 | 2026-11-02 | `00860ac` |         0.245 |         0.106 |         0.540 | 0.30–0.36× |
 | 0.1.2 | 2026-10-29 | `5a504f5` |         0.361 |         0.105 |         0.559 | 0.30–0.38× |
 | 0.1.1 | 2026-10-29 | `d1840cd` |         0.443 |         0.127 |         0.563 | 0.30–0.38× |
 | 0.1.0 | 2026-10-29 | `e530e92` |         0.532 |         0.143 |         0.909 | 0.32–0.39× |
 
-单核为 600 秒/关批量结果；8 核为 60 秒/关最好值（0.1.2 跑了两组三次）。峰值 RSS
-一列为同一版本内各项的比值范围：Microban 单核 / 8 核、XSokoban 批量与单关峰值。
+单核为 600 秒/关批量结果；8 核为 60 秒/关最好值（0.1.2 跑了两组共六次，0.1.3
+跑了一组三次）。峰值 RSS 一列为同一版本内各项的比值范围：Microban 单核 / 8 核、
+XSokoban 批量与单关峰值。
 
 不同会话的绝对耗时有漂移，表中比值均取自同一次会话的配对运行。
+
+## 0.1.3
+
+### 环境
+
+| 项目           | 值                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| 日期           | 2026-11-02                                                                                       |
+| 提交           | `00860ac` + 版本号 0.1.3（提交前的工作树）                                                        |
+| 系统           | Windows 11 Pro 10.0.26300                                                                        |
+| CPU / 内存     | Intel Core i9-14900HX（8 P-core + 16 E-core，32 逻辑核）/ 32 GB                                  |
+| Rust           | rustc 1.99.1；thin LTO、`codegen-units = 1`、`panic = "abort"`、mimalloc                         |
+| C++            | clang++ 23.1.4，`-O3 -DTHREADS`，Festival 3.1 `f7c0231`                                          |
+| 二进制 SHA-256 | Rust `cf8fbb54…`；C++ `16f46d56…`（与 0.1.0–0.1.2 相同）                                         |
+| 关卡集         | Microban I 155 关 `7077dba0…`；XSokoban 3.3c 90 关 `0c6fe8d1…`                                   |
+
+### 测量方法
+
+与 0.1.2 相同：单核 600 秒/关、默认八策略、固定 CPU 0、两轮交换求解器先后；8 核
+仅 Microban、60 秒/关、一组三次；内存为整批进程峰值工作集；所有解用
+`festival-bench verify-solutions` 回放。
+
+本会话 C++ 基线比 0.1.2 会话快约 10%（Microban 18.85–18.97 vs 21.08 s），XSokoban
+快约 1–5%（182.5–190.7 vs 192.8 s）；绝对值不可跨会话直接比较，表中比值均为同会话配对。
+
+0.1.3 相对 0.1.2 的主要变化是 `00860ac` 的门控多规划 portfolio 与 Hungarian 匹配
+advisor：仅对 `box_count <= 12 && index_num() <= 80` 的 `ForwardWithBases` 关卡探测
+最多四个停车方案，并按分配距离挑选子节点。按当时的同日配对，Microban 求解时间
+−28.6%、扩张 −23.7%，XSokoban 中性。
+
+### Microban I（155 关）
+
+| 指标               |    festival-rs |               C++ |         Rust / C++ |
+| ------------------ | -------------: | ----------------: | -----------------: |
+| 解出               |        155/155 |           155/155 |                  — |
+| 单核总耗时（两轮） |  4.646–4.827 s |  18.853–18.968 s |       0.245–0.256 |
+| 单核总耗时（最好比值） |     4.646 s |          18.968 s |         **0.245** |
+| 8 核总耗时（三次） |  8.732–9.250 s |  73.734–82.825 s |       0.106–0.123 |
+| 8 核总耗时（最好比值） |     8.732 s |          82.360 s |         **0.106** |
+| 步数 / 推动        | 22,284 / 5,924 |    22,460 / 5,912 | 99.22% / 100.20% |
+| 峰值工作集（单核） |       242.3 MB |          771.7 MB |              0.314 |
+| 峰值工作集（8 核） |     1,807.4 MB |        5,961.9 MB |              0.303 |
+| 解回放             |        155/155 |           155/155 |                  — |
+
+Microban 单核比值由 0.1.2 的 0.361 降至 0.245。解的质量有轻微变化：相对 0.1.2 的
+22,486 / 5,920 变为 22,284 / 5,924（moves −0.9%、pushes +0.1%），全部解合法。
+8 核最好值 0.106 与 0.1.2 的 0.105 持平；三组配对比值分别为 0.106 / 0.112 / 0.123。
+该指标受取消时序与热漂移主导，只作吞吐参考。
+
+### XSokoban（90 关）
+
+| 指标                             |       festival-rs |               C++ |    Rust / C++ |
+| -------------------------------- | ----------------: | ----------------: | ------------: |
+| 解出                             |             90/90 |             90/90 |             — |
+| 单核总耗时（两轮）               | 101.424–102.914 s | 182.515–190.683 s |   0.540–0.556 |
+| 单核总耗时（最好比值）           |         102.914 s |         190.683 s |     **0.540** |
+| 步数 / 推动                      |   93,723 / 28,639 |   94,245 / 28,709 | 99.45% / 99.76% |
+| 峰值工作集（批量）               |          339.7 MB |          932.8 MB |         0.364 |
+| 峰值工作集（单关最大，第 29 关） |          274.4 MB |          922.8 MB |         0.297 |
+| 解回放                           |             90/90 |             90/90 |             — |
+
+portfolio 只覆盖 9 个小 XSokoban 关卡，解由 0.1.2 的 93,659 / 28,601 变为
+93,723 / 28,639（+64 / +38），全部回放通过；整批耗时仍由第 29 关主导（本次 Rust
+54–56 s、C++ 113–115 s），其余关卡合计约 45–49 s vs 70–76 s。因此 XSokoban 比值
+与 0.1.2 的 0.559 在漂移范围内持平，不宜单独当作稳态吞吐。
+
+### 复现
+
+```sh
+cargo build --release -p festival-cli -p festival-bench
+scripts/build_cpp_ref.sh
+sha256sum -c levels/corpus/microban.xsb.sha256
+sha256sum -c levels/corpus/xsokoban.sok.sha256
+
+# 单核批量固定 CPU 0，两轮交换先后
+mkdir -p out/013/mb-r1-rust out/013/mb-r1-cpp out/013/xs-r1-rust out/013/xs-r1-cpp
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --time 600 --cores 1 --out-dir out/013/mb-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/013/mb-r1-cpp"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --time 600 --cores 1 --out-dir out/013/xs-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/013/xs-r1-cpp"
+
+# 8 核 Microban（一组三次）与峰值内存（命令同 0.1.0 节）
+# 回放
+target/release/festival-bench.exe verify-solutions levels/corpus/microban.xsb out/013/mb-r2-rust/solutions.sok
+target/release/festival-bench.exe verify-solutions levels/corpus/xsokoban.sok out/013/xs-r2-rust/solutions.sok
+```
 
 ## 0.1.2
 

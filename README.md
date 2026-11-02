@@ -8,10 +8,10 @@ Compared with Festival 3.1 on the same host; both solvers solve every level in t
 
 | Level set        | Metric     | festival-rs |       C++ | Rust / C++ |
 | ---------------- | ---------- | ----------: | --------: | ---------: |
-| Microban I (155) | Total time |     7.602 s |  21.077 s |  **0.361** |
-|                  | Peak RSS   |    276.7 MB |  735.5 MB |  **0.376** |
-| XSokoban (90)    | Total time |   107.848 s | 192.793 s |  **0.559** |
-|                  | Peak RSS   |    301.1 MB |  864.7 MB |  **0.348** |
+| Microban I (155) | Total time |     4.646 s |  18.968 s |  **0.245** |
+|                  | Peak RSS   |    242.3 MB |  771.7 MB |  **0.314** |
+| XSokoban (90)    | Total time |   102.914 s | 190.683 s |  **0.540** |
+|                  | Peak RSS   |    339.7 MB |  932.8 MB |  **0.364** |
 
 Times and RSS cover the full level-set batch; absolute times drift with host load, so compare the ratios. See [`docs/benchmarks.md`](docs/benchmarks.md) for details. Rust-only optimizations that go beyond the C++ reference are tracked in [`docs/optimization.md`](docs/optimization.md).
 
