@@ -234,13 +234,9 @@ pub fn build_lurd(level: &Level, moves: &[Move]) -> Result<SolutionText> {
     })
 }
 
-pub fn write_solutions_header(
-    path: &Path,
-    level_set_name: &str,
-    solver_name: &str,
-) -> io::Result<()> {
+pub fn write_solutions_header(path: &Path, level_set_name: &str) -> io::Result<()> {
     let mut file = File::create(path)?;
-    writeln!(file, "{solver_name} solution file")?;
+    writeln!(file, "Solutions")?;
     writeln!(file, "===========================")?;
     writeln!(file, "Collection: {level_set_name}")?;
     Ok(())
@@ -274,25 +270,24 @@ pub fn append_solution(path: &Path, lurd: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub fn append_solution_time(path: &Path, elapsed: Duration, solver_name: &str) -> io::Result<()> {
+pub fn append_solution_time(path: &Path, elapsed: Duration) -> io::Result<()> {
     let mut file = OpenOptions::new().append(true).create(true).open(path)?;
     let (date, time) = utc_now_strings();
     writeln!(file)?;
-    writeln!(file, "Solver: {solver_name}")?;
     writeln!(file, "Solver time: {}", format_hms(elapsed.as_secs()))?;
     writeln!(file, "Solver date: {date}  {time}")?;
     writeln!(file)?;
     Ok(())
 }
 
-pub fn write_times_header(path: &Path, solver_name: &str) -> io::Result<()> {
+pub fn write_times_header(path: &Path) -> io::Result<()> {
     let mut file = File::create(path)?;
     let (date, time) = utc_now_strings();
     writeln!(
         file,
         "--------------------------------------------------------------------------------------"
     )?;
-    writeln!(file, "Sokoban Solver Statistics - {solver_name}")?;
+    writeln!(file, "Sokoban Solver Statistics")?;
     writeln!(file, "Date: {date}  {time}")?;
     writeln!(
         file,
@@ -300,7 +295,7 @@ pub fn write_times_header(path: &Path, solver_name: &str) -> io::Result<()> {
     )?;
     writeln!(
         file,
-        "   Task       Time Plugin               Result                     Moves  Pushes Level"
+        "   Task       Time Result                     Moves  Pushes Level"
     )?;
     writeln!(
         file,
@@ -314,7 +309,6 @@ pub fn append_times_row(
     path: &Path,
     record: usize,
     elapsed: Duration,
-    solver_name: &str,
     solved: bool,
     failure_reason: &str,
     moves: usize,
@@ -324,7 +318,6 @@ pub fn append_times_row(
     let mut file = OpenOptions::new().append(true).create(true).open(path)?;
     write!(file, "{record:7}  ")?;
     write!(file, " {} ", format_hms(elapsed.as_secs()))?;
-    write!(file, "{solver_name:<21}")?;
     if solved {
         write!(file, "OK                     ")?;
         write!(file, "{moves:9}{pushes:8} ")?;
@@ -355,7 +348,7 @@ pub fn write_times_footer(
     write!(file, " {} ", format_hms(total_elapsed.as_secs()))?;
     let summary = format!("Total                OK: {solved_levels} Failed: {failed}      ");
     write!(file, "{summary}")?;
-    for _ in summary.len()..44 {
+    for _ in summary.len()..23 {
         write!(file, " ")?;
     }
     writeln!(file, "{total_moves:9}{total_pushes:8}     :")?;

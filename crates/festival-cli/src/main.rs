@@ -28,8 +28,6 @@ use spec::{LevelSpec, parse_duration, parse_level_spec, parse_memory};
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-const SOLVER_NAME: &str = "Festival 3.1";
-const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
 const DEFAULT_TREE_LOG_SIZE: u32 = 23;
 const MIN_TREE_LOG_SIZE: u32 = 14;
 const MAX_TREE_LOG_SIZE: u32 = 23;
@@ -67,7 +65,7 @@ const REPLACED_OPTIONS: [(&str, &str); 23] = [
 #[command(
     name = "festival-rs",
     version,
-    about = "Festival 3.1 Rust port: solve Sokoban level sets with eight algorithms.",
+    about = "festival-rs: solve Sokoban level sets with eight algorithms.",
     after_help = "\
 Examples:
   festival-rs levels/corpus/microban.xsb
@@ -289,9 +287,6 @@ fn run(args: &Args) -> Result<(), String> {
     let human = args.format == Format::Human;
 
     if human {
-        println!("===================================");
-        println!("{BANNER_NAME}");
-        println!("===================================");
         println!("{} levels loaded from {input_name}", raws.len());
     }
 
@@ -387,10 +382,10 @@ fn run_solver(
         }
     }
 
-    write_solutions_header(&solution_path, &args.input, SOLVER_NAME)
+    write_solutions_header(&solution_path, &args.input)
         .map_err(|err| format!("{}: {err}", solution_path.display()))?;
     if !yasc_mode {
-        write_times_header(&times_path, SOLVER_NAME)
+        write_times_header(&times_path)
             .map_err(|err| format!("{}: {err}", times_path.display()))?;
     }
 
@@ -607,7 +602,7 @@ fn run_solver(
                     .map_err(|err| format!("{}: {err}", solution_path.display()))?;
             }
         }
-        append_solution_time(&solution_path, level_started.elapsed(), SOLVER_NAME)
+        append_solution_time(&solution_path, level_started.elapsed())
             .map_err(|err| format!("{}: {err}", solution_path.display()))?;
 
         let failure_reason = if result.solved {
@@ -639,7 +634,6 @@ fn run_solver(
                 &times_path,
                 record,
                 level_started.elapsed(),
-                SOLVER_NAME,
                 result.solved,
                 failure_reason.as_deref().unwrap_or("Unknown reason"),
                 moves,
@@ -766,18 +760,8 @@ fn record_failure(
     if yasc_mode {
         return Ok(());
     }
-    append_times_row(
-        times_path,
-        record,
-        elapsed,
-        SOLVER_NAME,
-        false,
-        reason,
-        0,
-        0,
-        title,
-    )
-    .map_err(|err| format!("{}: {err}", times_path.display()))?;
+    append_times_row(times_path, record, elapsed, false, reason, 0, 0, title)
+        .map_err(|err| format!("{}: {err}", times_path.display()))?;
     Ok(())
 }
 

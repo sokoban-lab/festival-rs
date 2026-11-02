@@ -1,4 +1,4 @@
-//! Core algorithms of the Festival Sokoban solver.
+//! Core algorithms of the festival-rs Sokoban solver.
 //!
 //! The crate is `#![forbid(unsafe_code)]`: all state is either owned by a
 //! `Level`/`LevelContext`, or by a per-thread search context (added in later
