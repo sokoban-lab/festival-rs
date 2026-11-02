@@ -36,7 +36,7 @@ Then run, for example:
 
 ```sh
 cargo run -p festival-bench -- XSokoban
-cargo run -p festival-cli -- XSokoban -level 1 --dump
+cargo run -p festival-cli -- XSokoban --level 1 --analyse --dump
 ```
 
 Licenses and attribution:

@@ -1152,6 +1152,11 @@ Festival 源码头部声明：
 > （`ms`/`s`/`m`/`h`）；`--alg` 接受 `a`..`h` 或 `0`..`7`；输入 `-` 表示从
 > stdin 读取；`--format json` 输出机器可读结果。C++ 单横线参数与
 > `--from`/`--to` 已移除，上表保留为历史兼容记录；C++ 基线脚本仍使用原参数。
+>
+> **2026-11-02 CLI 参数命名修订。** `--time`、`--alg`、`--cores`、`--out-dir`、
+> `--out-file` 分别改名为 `--timeout`、`--algorithm`、`--threads`、
+> `--output-dir`、`--output-file`；`--tree-log-size` 与 `--extra-mem` 合并为
+> `--memory <SIZE>`。旧名字会报错并提示替代项。
 
 ### 12.4 失败原因字符串（用于 `times.txt`）
 

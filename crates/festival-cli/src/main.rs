@@ -23,116 +23,164 @@ use festival_core::{Level, LevelContext, SearchClock};
 mod json;
 mod spec;
 
-use spec::{LevelSpec, parse_duration, parse_level_spec};
+use spec::{LevelSpec, parse_duration, parse_level_spec, parse_memory};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const SOLVER_NAME: &str = "Festival 3.1";
 const BANNER_NAME: &str = "Festival 3.1 (Rust port)";
-const BASE_TREE_LOG_SIZE: u32 = 20;
+const DEFAULT_TREE_LOG_SIZE: u32 = 20;
+const MIN_TREE_LOG_SIZE: u32 = 14;
+const MAX_TREE_LOG_SIZE: u32 = 23;
+/// Estimated process memory per tree node, including per-worker caches.
+const BYTES_PER_TREE_NODE: u64 = 256;
 
-/// Options of the removed C++-compatible syntax, with their replacements.
-const REMOVED_OPTIONS: [(&str, &str); 16] = [
+/// Options that are no longer accepted, with their replacements.
+const REPLACED_OPTIONS: [(&str, &str); 23] = [
     ("-level", "--level <SPEC>"),
     ("-from", "--level <SPEC>"),
     ("-to", "--level <SPEC>"),
     ("--from", "--level <SPEC>"),
     ("--to", "--level <SPEC>"),
-    ("-out_dir", "--out-dir"),
-    ("--out_dir", "--out-dir"),
-    ("-out_file", "--out-file"),
-    ("--out_file", "--out-file"),
-    ("-time", "--time"),
+    ("-out_dir", "--output-dir"),
+    ("--out_dir", "--output-dir"),
+    ("--out-dir", "--output-dir"),
+    ("-out_file", "--output-file"),
+    ("--out_file", "--output-file"),
+    ("--out-file", "--output-file"),
+    ("-time", "--timeout"),
+    ("--time", "--timeout"),
     ("-save_best", "--save-best"),
     ("--save_best", "--save-best"),
-    ("-cores", "--cores"),
-    ("-alg", "--alg"),
-    ("-extra_mem", "--extra-mem"),
-    ("--extra_mem", "--extra-mem"),
+    ("-cores", "--threads"),
+    ("--cores", "--threads"),
+    ("-alg", "--algorithm"),
+    ("--alg", "--algorithm"),
+    ("-extra_mem", "--memory"),
+    ("--extra_mem", "--memory"),
+    ("--extra-mem", "--memory"),
+    ("--tree-log-size", "--memory"),
 ];
 
 #[derive(Debug, Parser)]
 #[command(
     name = "festival-rs",
     version,
-    about = "Festival 3.1 Rust port: all strategies and the 1/2/4/8-core scheduler."
+    about = "Festival 3.1 Rust port: solve Sokoban level sets with eight algorithms.",
+    after_help = "\
+Examples:
+  festival-rs levels/corpus/microban.xsb
+  festival-rs levels/corpus/microban.xsb -l 1..20 -t 60
+  festival-rs levels/corpus/xsokoban.sok -j 1 --memory 2G
+  festival-rs levels/corpus/xsokoban.sok --analyse --dump
+  festival-rs levels/smoke/smoke.sok --format json
+
+Output files default to the current directory; use -o DIR to change that."
 )]
 struct Args {
-    /// Level set file, a name resolved under `<out-dir>/levels/<name>.sok`, or
+    /// Level set file, a name resolved under `<output-dir>/levels/<name>.sok`, or
     /// `-` to read from standard input.
     #[arg(value_name = "INPUT")]
     input: String,
 
     /// Levels to solve, 1-based: `all`, `3`, `1..5`, or `2,7,9`.
     #[arg(
+        short,
         long,
         value_name = "SPEC",
         default_value = "all",
-        value_parser = parse_level_spec
+        value_parser = parse_level_spec,
+        help_heading = "Search options"
     )]
     level: LevelSpec,
 
-    /// Output directory for `solutions.sok` and `times.txt`.
-    #[arg(long, value_name = "DIR", default_value = ".")]
-    out_dir: PathBuf,
-
     /// Time limit per level; units `ms`, `s`, `m`, `h`; a bare number is seconds.
     #[arg(
+        short,
         long,
         value_name = "DURATION",
         default_value = "600",
-        value_parser = parse_duration
+        value_parser = parse_duration,
+        help_heading = "Search options"
     )]
-    time: Duration,
+    timeout: Duration,
 
-    /// YASC mode: write only this solution file and skip `times.txt`.
-    #[arg(long, value_name = "FILE")]
-    out_file: Option<PathBuf>,
-
-    /// Keep the best partial solution when a level is not solved.
-    #[arg(long)]
-    save_best: bool,
+    /// Force one algorithm `a`..`h` (or `0`..`7`); the default runs all eight.
+    #[arg(
+        short,
+        long,
+        value_name = "ALGORITHM",
+        value_enum,
+        ignore_case = true,
+        help_heading = "Search options"
+    )]
+    algorithm: Option<Strategy>,
 
     /// Worker threads: 1/2/4/8. Defaults to the host processor count, capped.
-    #[arg(long, value_name = "N")]
-    cores: Option<usize>,
+    #[arg(short = 'j', long, value_name = "N", help_heading = "Search options")]
+    threads: Option<usize>,
 
-    /// Force strategy `a`..`h` (or `0`..`7`); the default runs all eight.
-    #[arg(long, value_name = "STRATEGY", value_enum, ignore_case = true)]
-    alg: Option<Strategy>,
+    /// Approximate memory budget for the search, e.g. `512M` or `2G`; split
+    /// across worker threads. A bare number is MiB. Defaults to about 256 MiB
+    /// per worker.
+    #[arg(
+        short,
+        long,
+        value_name = "SIZE",
+        value_parser = parse_memory,
+        help_heading = "Search options"
+    )]
+    memory: Option<u64>,
 
-    /// Add N to the tree capacity exponent.
-    #[arg(long, value_name = "N", default_value_t = 0)]
-    extra_mem: i32,
-
-    /// Disable the time limit and stop after N expansions.
-    #[arg(long, value_name = "N")]
+    /// Disable the time limit and stop after N node expansions.
+    #[arg(long, value_name = "N", help_heading = "Search options")]
     max_expansions: Option<u64>,
 
-    /// Skip reverse packing and run NORMAL FESS from the initial position.
-    #[arg(long)]
+    /// Skip reverse packing and search forward from the initial position.
+    #[arg(long, help_heading = "Search options")]
     forward_only: bool,
 
+    /// Keep the best partial solution when a level is not solved.
+    #[arg(long, help_heading = "Search options")]
+    save_best: bool,
+
     /// Replay and validate every produced solution.
-    #[arg(long)]
+    #[arg(long, help_heading = "Search options")]
     validate: bool,
 
-    /// Print a static analysis summary instead of solving.
-    #[arg(long)]
-    analyse: bool,
+    /// Write `solutions.sok` and `times.txt` here; short input names resolve
+    /// under `<DIR>/levels/`.
+    #[arg(
+        short,
+        long,
+        value_name = "DIR",
+        default_value = ".",
+        help_heading = "Output options"
+    )]
+    output_dir: PathBuf,
 
-    /// Dump boards, masks and room decomposition (with `--analyse`).
-    #[arg(long)]
-    dump: bool,
-
-    /// Tree capacity as `log2(nodes)`; `--extra-mem` is added on top.
-    #[arg(long, value_name = "N")]
-    tree_log_size: Option<u32>,
+    /// Write only this solution file and skip `times.txt` (YASC mode).
+    #[arg(long, value_name = "FILE", help_heading = "Output options")]
+    output_file: Option<PathBuf>,
 
     /// Output format.
-    #[arg(long, value_name = "FORMAT", value_enum, default_value = "human")]
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        value_enum,
+        default_value = "human",
+        help_heading = "Output options"
+    )]
     format: Format,
+
+    /// Print a static analysis summary instead of solving.
+    #[arg(long, help_heading = "Analysis options")]
+    analyse: bool,
+
+    /// Dump the initial board and room decomposition (requires `--analyse`).
+    #[arg(long, help_heading = "Analysis options")]
+    dump: bool,
 }
 
 /// The output format.
@@ -187,21 +235,21 @@ impl fmt::Display for Strategy {
 }
 
 fn main() -> ExitCode {
-    if let Some((name, replacement)) = removed_option() {
-        eprintln!("error: `{name}` was removed; use `{replacement}` instead");
+    if let Some((name, replacement)) = replaced_option() {
+        eprintln!("error: `{name}` was replaced; use `{replacement}` instead");
         return ExitCode::from(2);
     }
     let args = Args::parse();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("{message}");
+            eprintln!("error: {message}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn removed_option() -> Option<(&'static str, &'static str)> {
+fn replaced_option() -> Option<(&'static str, &'static str)> {
     for arg in std::env::args_os().skip(1) {
         let Some(arg) = arg.to_str() else {
             continue;
@@ -209,22 +257,30 @@ fn removed_option() -> Option<(&'static str, &'static str)> {
         if arg == "--" {
             break;
         }
-        if let Some(&entry) = REMOVED_OPTIONS.iter().find(|(name, _)| *name == arg) {
+        if let Some(entry) = replacement_for(arg) {
             return Some(entry);
         }
     }
     None
 }
 
+fn replacement_for(arg: &str) -> Option<(&'static str, &'static str)> {
+    let option = arg.split_once('=').map_or(arg, |(option, _)| option);
+    REPLACED_OPTIONS
+        .iter()
+        .copied()
+        .find(|(name, _)| *name == option)
+}
+
 fn run(args: &Args) -> Result<(), String> {
-    if let Some(cores) = args.cores {
-        if !CORE_COUNTS.contains(&cores) {
-            return Err("Number of cores should be 1/2/4/8".to_string());
+    if let Some(threads) = args.threads {
+        if !CORE_COUNTS.contains(&threads) {
+            return Err("number of threads must be 1/2/4/8".to_string());
         }
     }
-    if let Some(alg) = args.alg {
-        if !strategy_supported(alg.index()) {
-            return Err(format!("strategy {alg} is not implemented"));
+    if let Some(algorithm) = args.algorithm {
+        if !strategy_supported(algorithm.index()) {
+            return Err(format!("algorithm {algorithm} is not implemented"));
         }
     }
 
@@ -243,18 +299,23 @@ fn run(args: &Args) -> Result<(), String> {
         return run_analysis(args, raws, &selected);
     }
 
-    let cores = args.cores.unwrap_or_else(default_cores);
+    let threads = args.threads.unwrap_or_else(default_cores);
+    let search_threads = if args.forward_only { 1 } else { threads };
+    let log_max_nodes = tree_log_size(args.memory, search_threads)?;
     if human {
         if args.forward_only {
             println!("note: --forward-only runs the Phase 2 NORMAL search on one thread.");
-        } else if let Some(alg) = args.alg {
-            println!("using {cores} thread(s); forced strategy {alg}");
+        } else if let Some(algorithm) = args.algorithm {
+            println!("using {threads} thread(s); forced algorithm {algorithm}");
         } else {
-            println!("using {cores} thread(s); scheduling strategies A-H");
+            println!("using {threads} thread(s); scheduling algorithms A-H");
+        }
+        if let Some(memory) = args.memory {
+            println!("memory budget: {} MiB", memory / (1024 * 1024));
         }
     }
 
-    run_solver(args, raws, &selected, cores)
+    run_solver(args, raws, &selected, threads, log_max_nodes)
 }
 
 fn load_input(args: &Args) -> Result<(Vec<RawLevel>, String), String> {
@@ -269,7 +330,7 @@ fn load_input(args: &Args) -> Result<(Vec<RawLevel>, String), String> {
         }
         Ok((raws, "stdin".to_string()))
     } else {
-        let path = resolve_level_file(&args.out_dir, &args.input);
+        let path = resolve_level_file(&args.output_dir, &args.input);
         let raws = load_levels(&path).map_err(|err| format!("{}: {err}", path.display()))?;
         Ok((raws, path.display().to_string()))
     }
@@ -306,19 +367,20 @@ fn run_solver(
     args: &Args,
     raws: Vec<RawLevel>,
     selected: &[usize],
-    cores: usize,
+    threads: usize,
+    log_max_nodes: u32,
 ) -> Result<(), String> {
     let human = args.format == Format::Human;
-    let yasc_mode = args.out_file.is_some();
-    let solution_path = match &args.out_file {
+    let yasc_mode = args.output_file.is_some();
+    let solution_path = match &args.output_file {
         Some(path) => path.clone(),
-        None => args.out_dir.join("solutions.sok"),
+        None => args.output_dir.join("solutions.sok"),
     };
-    let times_path = args.out_dir.join("times.txt");
+    let times_path = args.output_dir.join("times.txt");
 
     if !yasc_mode {
-        fs::create_dir_all(&args.out_dir)
-            .map_err(|err| format!("{}: {err}", args.out_dir.display()))?;
+        fs::create_dir_all(&args.output_dir)
+            .map_err(|err| format!("{}: {err}", args.output_dir.display()))?;
     } else if let Some(parent) = solution_path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|err| format!("{}: {err}", parent.display()))?;
@@ -332,7 +394,6 @@ fn run_solver(
             .map_err(|err| format!("{}: {err}", times_path.display()))?;
     }
 
-    let log_max_nodes = tree_log_size(args);
     // One worker set for the whole run, like C++ `search_trees[]`.
     let mut solver = Solver::new();
     let mut record = 0usize;
@@ -391,7 +452,7 @@ fn run_solver(
             }
         };
 
-        let analysis_clock = SearchClock::new(Some(args.time), None);
+        let analysis_clock = SearchClock::new(Some(args.timeout), None);
         let ctx = match LevelContext::analyse(level, &analysis_clock) {
             Ok(ctx) => ctx,
             Err(err) => {
@@ -421,11 +482,12 @@ fn run_solver(
         // C++ budgets with `time(0)`; compare epoch seconds so the remaining
         // whole-second count matches even when preprocessing straddles a tick.
         // Sub-second budgets have no C++ equivalent, so they use the clock.
-        let remaining = if args.time >= Duration::from_secs(1) {
+        let remaining = if args.timeout >= Duration::from_secs(1) {
             let elapsed_secs = epoch_secs().saturating_sub(level_epoch);
-            args.time.saturating_sub(Duration::from_secs(elapsed_secs))
+            args.timeout
+                .saturating_sub(Duration::from_secs(elapsed_secs))
         } else {
-            args.time.saturating_sub(level_started.elapsed())
+            args.timeout.saturating_sub(level_started.elapsed())
         };
 
         let result = if args.forward_only {
@@ -479,8 +541,8 @@ fn run_solver(
             }
         } else {
             let config = SchedulerConfig {
-                cores,
-                forced_alg: args.alg.map(Strategy::index),
+                cores: threads,
+                forced_alg: args.algorithm.map(Strategy::index),
                 time_limit: remaining,
                 max_expansions: args.max_expansions,
                 log_max_nodes,
@@ -556,7 +618,7 @@ fn run_solver(
                 .unwrap_or("Unknown reason")
                 .to_string();
             if args.max_expansions.is_none()
-                && level_started.elapsed() >= args.time
+                && level_started.elapsed() >= args.timeout
                 && reason != "Too many moves"
             {
                 reason = "Time limit exceeded".to_string();
@@ -719,9 +781,20 @@ fn record_failure(
     Ok(())
 }
 
-fn tree_log_size(args: &Args) -> u32 {
-    let base = args.tree_log_size.unwrap_or(BASE_TREE_LOG_SIZE) as i32;
-    (base + args.extra_mem).clamp(14, 23) as u32
+fn tree_log_size(memory: Option<u64>, threads: usize) -> Result<u32, String> {
+    let Some(memory) = memory else {
+        return Ok(DEFAULT_TREE_LOG_SIZE);
+    };
+    let per_thread = memory / threads as u64;
+    let nodes = per_thread / BYTES_PER_TREE_NODE;
+    let min_nodes = 1u64 << MIN_TREE_LOG_SIZE;
+    if nodes < min_nodes {
+        let min_mib = (threads as u64 * min_nodes * BYTES_PER_TREE_NODE) / (1024 * 1024);
+        return Err(format!(
+            "memory budget is too small for {threads} thread(s); use at least {min_mib} MiB"
+        ));
+    }
+    Ok(nodes.ilog2().min(MAX_TREE_LOG_SIZE))
 }
 
 fn epoch_secs() -> u64 {
@@ -743,7 +816,7 @@ fn run_analysis(args: &Args, raws: Vec<RawLevel>, selected: &[usize]) -> Result<
         let level_number = index + 1;
         let title = raw.title.clone();
         let started = Instant::now();
-        let clock = SearchClock::new(Some(args.time), args.max_expansions);
+        let clock = SearchClock::new(Some(args.timeout), args.max_expansions);
         let level = match Level::preprocess(raw) {
             Ok(level) => level,
             Err(err) => {
@@ -915,5 +988,52 @@ fn print_room_map(context: &LevelContext) {
 fn print_indented(text: &str, indent: &str) {
     for line in text.lines() {
         println!("{indent}{line}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn maps_replaced_options() {
+        assert_eq!(replacement_for("--time=60"), Some(("--time", "--timeout")));
+        assert_eq!(replacement_for("-cores"), Some(("-cores", "--threads")));
+        assert_eq!(replacement_for("--alg=A"), Some(("--alg", "--algorithm")));
+        assert_eq!(
+            replacement_for("--out-dir=out"),
+            Some(("--out-dir", "--output-dir"))
+        );
+        assert_eq!(
+            replacement_for("--tree-log-size=21"),
+            Some(("--tree-log-size", "--memory"))
+        );
+        assert_eq!(
+            replacement_for("--extra-mem=2"),
+            Some(("--extra-mem", "--memory"))
+        );
+        assert_eq!(replacement_for("--level=1..5"), None);
+        assert_eq!(replacement_for("levels.sok"), None);
+    }
+
+    #[test]
+    fn maps_memory_to_tree_log_size() {
+        let mib = 1024 * 1024;
+        assert_eq!(tree_log_size(None, 1).unwrap(), DEFAULT_TREE_LOG_SIZE);
+        assert_eq!(tree_log_size(Some(256 * mib), 1).unwrap(), 20);
+        assert_eq!(tree_log_size(Some(512 * mib), 1).unwrap(), 21);
+        assert_eq!(tree_log_size(Some(1024 * mib), 1).unwrap(), 22);
+        assert_eq!(tree_log_size(Some(2048 * mib), 1).unwrap(), 23);
+        assert_eq!(tree_log_size(Some(4096 * mib), 1).unwrap(), 23);
+        assert_eq!(tree_log_size(Some(512 * mib), 4).unwrap(), 19);
+        assert_eq!(tree_log_size(Some(512 * mib), 8).unwrap(), 18);
+        assert!(tree_log_size(Some(16 * mib), 8).is_err());
+    }
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Args::command().debug_assert();
     }
 }

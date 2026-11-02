@@ -78,7 +78,7 @@ run_solver() {
 
     start=$(now_ms)
     ./target/release/festival-rs.exe "$levels_file" "${range_rust[@]}" \
-        --time "$TIME" --cores 1 --alg "$alg" --out-dir "$rust_dir" > "$rust_dir/run.log"
+        --timeout "$TIME" --threads 1 --algorithm "$alg" --output-dir "$rust_dir" > "$rust_dir/run.log"
     end=$(now_ms)
     local rust_ms=$((end - start))
 

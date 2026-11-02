@@ -79,7 +79,7 @@ jobs:
           bin=target/release/festival-rs
           if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
           rm -rf out
-          "$bin" levels/smoke/smoke.sok --level 1 --max-expansions 500000 --validate --out-dir out
+          "$bin" levels/smoke/smoke.sok --level 1 --max-expansions 500000 --validate --output-dir out
           test -s out/solutions.sok
 
   doc:

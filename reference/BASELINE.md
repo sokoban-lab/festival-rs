@@ -2,6 +2,9 @@
 
 Status: built and used for the Gate G2 differential run on 2026-10-27.
 
+> Rust commands below use the current CLI flag names; the recorded measurements
+> predate the CLI flag rename and are unchanged.
+
 ## Source
 
 - Festival 3.1, commit `f7c023122f4e93e5e649ec856a9721b592d1108b`
@@ -38,13 +41,13 @@ target/festival-cpp.exe levels/corpus/microban.xsb \
 
 # Rust (from repository root)
 cargo run --release -q -p festival-cli -- levels/corpus/microban.xsb \
-  --level 1..40 --time 60 --cores 1 --alg 0 --out-dir target/g2-rust
+  --level 1..40 --timeout 60 --threads 1 --algorithm 0 --output-dir target/g2-rust
 ```
 
-> Phase 4 restored C++ compatibility: `--alg 0` now means strategy A. To
+> Phase 4 restored C++ compatibility: `--algorithm 0` now means strategy A. To
 > reproduce the forward-only G2 numbers below, use `--forward-only` instead of
-> `--alg 0`; `scripts/run_g2.sh` has been updated accordingly. The recorded G2
-> run predates the strategy dispatcher.
+> `--algorithm 0`; `scripts/run_g2.sh` has been updated accordingly. The
+> recorded G2 run predates the strategy dispatcher.
 
 | Metric | C++ | Rust | Ratio |
 |---|---|---|---|
@@ -84,7 +87,7 @@ b8d50898111416bcdf679189def23d4b49bd4b0420d5a15bc57fe26813d05f5b *target/g2-rust
 
 ```sh
 cargo run --release -q -p festival-cli -- levels/corpus/microban.xsb \
-  --level 1..100 --time 1 --cores 1 --alg 0 --out-dir target/g2-no-panic
+  --level 1..100 --timeout 1 --threads 1 --algorithm 0 --output-dir target/g2-no-panic
 ```
 
 Exit status 0, 96/100 solved at a 1 s budget, zero panics or bounds errors.
@@ -597,7 +600,7 @@ counter instead of rewriting its 4M entries. Level-specific tables (MPDB2,
 pull MPDB2, rooms, envelopes, stuck patterns) are still rebuilt per level and
 per worker, as `preprocess_level` does.
 
-Per-level setup measured with `--time 0` (no search; Microban 1–155,
+Per-level setup measured with `--timeout 0` (no search; Microban 1–155,
 XSokoban 1–20):
 
 | Setup | before | after |

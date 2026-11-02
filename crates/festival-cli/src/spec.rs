@@ -148,6 +148,32 @@ pub fn parse_duration(text: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(seconds))
 }
 
+/// Parses a memory size such as `512M`, `2G` or `1.5GiB`.
+///
+/// A missing unit is interpreted as MiB.
+pub fn parse_memory(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let split = text
+        .find(|char: char| !char.is_ascii_digit() && char != '.')
+        .unwrap_or(text.len());
+    let (value, unit) = text.split_at(split);
+    let value: f64 = value
+        .parse()
+        .map_err(|_| format!("invalid memory size `{text}`"))?;
+    let multiplier = match unit.to_ascii_lowercase().as_str() {
+        "" | "m" | "mb" | "mib" => 1024.0 * 1024.0,
+        "b" => 1.0,
+        "k" | "kb" | "kib" => 1024.0,
+        "g" | "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
+        _ => return Err(format!("invalid memory unit in `{text}`")),
+    };
+    let bytes = value * multiplier;
+    if !bytes.is_finite() || bytes <= 0.0 || bytes > u64::MAX as f64 {
+        return Err(format!("memory must be positive: `{text}`"));
+    }
+    Ok(bytes.round() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +231,27 @@ mod tests {
             spec("9").select(3).unwrap_err().to_string(),
             "level 9 out of bounds"
         );
+    }
+
+    #[test]
+    fn parses_memory_sizes() {
+        assert_eq!(parse_memory("512M").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_memory("2G").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_memory("256mib").unwrap(), 256 * 1024 * 1024);
+        assert_eq!(parse_memory("1.5G").unwrap(), 1536 * 1024 * 1024);
+        assert_eq!(parse_memory("1024K").unwrap(), 1024 * 1024);
+        assert_eq!(parse_memory("1024B").unwrap(), 1024);
+        assert_eq!(parse_memory("512").unwrap(), 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn rejects_invalid_memory_sizes() {
+        for text in ["", "abc", "0", "-5", "1x", "1..5", "G"] {
+            assert!(
+                parse_memory(text).is_err(),
+                "memory size `{text}` should be rejected"
+            );
+        }
     }
 
     #[test]

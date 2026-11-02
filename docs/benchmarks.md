@@ -93,9 +93,9 @@ sha256sum -c levels/corpus/xsokoban.sok.sha256
 
 # 单核批量固定 CPU 0，两轮交换先后
 mkdir -p out/013/mb-r1-rust out/013/mb-r1-cpp out/013/xs-r1-rust out/013/xs-r1-cpp
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --time 600 --cores 1 --out-dir out/013/mb-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --timeout 600 --threads 1 --output-dir out/013/mb-r1-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/013/mb-r1-cpp"
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --time 600 --cores 1 --out-dir out/013/xs-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --timeout 600 --threads 1 --output-dir out/013/xs-r1-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/013/xs-r1-cpp"
 
 # 8 核 Microban（一组三次）与峰值内存（命令同 0.1.0 节）
@@ -174,9 +174,9 @@ sha256sum -c levels/corpus/xsokoban.sok.sha256
 
 # 单核批量固定 CPU 0，两轮交换先后（XSokoban 可加跑到三轮）
 mkdir -p out/mb-rust out/mb-cpp out/xs-rust out/xs-cpp
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --time 600 --cores 1 --out-dir out/mb-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --timeout 600 --threads 1 --output-dir out/mb-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/mb-cpp"
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --time 600 --cores 1 --out-dir out/xs-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --timeout 600 --threads 1 --output-dir out/xs-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/xs-cpp"
 
 # 8 核 Microban（三次）与峰值内存（命令同 0.1.0 节）
@@ -244,9 +244,9 @@ sha256sum -c levels/corpus/xsokoban.sok.sha256
 
 # 单核批量固定 CPU 0，两轮交换先后
 mkdir -p out/mb-rust out/mb-cpp out/xs-rust out/xs-cpp
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --time 600 --cores 1 --out-dir out/mb-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --timeout 600 --threads 1 --output-dir out/mb-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/mb-cpp"
-cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --time 600 --cores 1 --out-dir out/xs-rust"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --timeout 600 --threads 1 --output-dir out/xs-rust"
 cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/xs-cpp"
 
 # 8 核 Microban（三次）与峰值内存（命令同 0.1.0 节）
@@ -310,18 +310,18 @@ sha256sum -c levels/corpus/xsokoban.sok.sha256
 
 # 单核批量（固定 CPU 0）
 mkdir -p out/mb-rust out/mb-cpp out/xs-rust out/xs-cpp
-target/release/festival-rs.exe levels/corpus/microban.xsb --level 1..155 --time 600 --cores 1 --out-dir out/mb-rust
+target/release/festival-rs.exe levels/corpus/microban.xsb --level 1..155 --timeout 600 --threads 1 --output-dir out/mb-rust
 target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/mb-cpp
-target/release/festival-rs.exe levels/corpus/xsokoban.sok --level 1..90 --time 600 --cores 1 --out-dir out/xs-rust
+target/release/festival-rs.exe levels/corpus/xsokoban.sok --level 1..90 --timeout 600 --threads 1 --output-dir out/xs-rust
 target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/xs-cpp
 
 # 8 核 Microban（重复三次）
 mkdir -p out/mb-rust8 out/mb-cpp8
-target/release/festival-rs.exe levels/corpus/microban.xsb --level 1..155 --time 60 --cores 8 --out-dir out/mb-rust8
+target/release/festival-rs.exe levels/corpus/microban.xsb --level 1..155 --timeout 60 --threads 8 --output-dir out/mb-rust8
 target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 60 -cores 8 -out_dir out/mb-cpp8
 
 # 峰值内存
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/process_rss.ps1 -Out out/rss.log -Exe target/release/festival-rs.exe -ArgList "levels/corpus/microban.xsb|--level|1..155|--time|600|--cores|1|--out-dir|out/mb-rss"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/process_rss.ps1 -Out out/rss.log -Exe target/release/festival-rs.exe -ArgList "levels/corpus/microban.xsb|--level|1..155|--timeout|600|--threads|1|--output-dir|out/mb-rss"
 
 # 回放
 target/release/festival-bench.exe verify-solutions levels/corpus/microban.xsb out/mb-rust/solutions.sok
