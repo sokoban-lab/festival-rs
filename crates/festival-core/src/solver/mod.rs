@@ -1,6 +1,7 @@
 pub mod clock;
 pub mod context;
 pub mod forward;
+pub mod portfolio;
 pub mod scheduler;
 pub mod strategy;
 

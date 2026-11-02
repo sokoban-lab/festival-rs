@@ -20,6 +20,7 @@ use crate::search::snail;
 use crate::search::tree::Tree;
 use crate::solver::LevelContext;
 use crate::solver::forward::SolveOutcome;
+use crate::solver::portfolio;
 
 #[derive(Clone, Debug)]
 pub struct StrategyConfig {
@@ -235,6 +236,34 @@ pub fn solve_strategy_into(
     );
     let elapsed = started.elapsed().as_secs();
     let remaining = Duration::from_secs(total.as_secs().saturating_sub(elapsed));
+
+    if forward == SearchMode::ForwardWithBases {
+        let (time_limit, max_expansions) = phase_limit(config, remaining);
+        let portfolio_run = portfolio::run(
+            ctx,
+            forward,
+            backward,
+            tree,
+            helper,
+            perimeter,
+            time_limit.unwrap_or(remaining),
+            max_expansions,
+            config.log_max_nodes,
+            config.save_best,
+            config.cancel.clone(),
+        )?;
+        if let Some(run) = portfolio_run {
+            total_expansions += run.expansions;
+            return finish(
+                ctx,
+                run.solved,
+                run.moves,
+                run.failure,
+                total_expansions,
+                started,
+            );
+        }
+    }
 
     if forward == SearchMode::HfSearch {
         let first_budget = Duration::from_secs(remaining.as_secs() * 3 / 4);

@@ -21,6 +21,7 @@ pub struct AdvisorsElement {
     pub out_of_plan: i32,
     pub explorer: i32,
     pub imagine: i32,
+    pub matching: i32,
 }
 
 impl Default for AdvisorsElement {
@@ -34,6 +35,7 @@ impl Default for AdvisorsElement {
             out_of_plan: -1,
             explorer: -1,
             imagine: -1,
+            matching: -1,
         }
     }
 }
@@ -83,6 +85,63 @@ fn choose_advisor(
     }
 
     best_move
+}
+
+/// Chooses a child by the minimum-cost box-to-target assignment distance.
+fn matching_advisor(
+    ctx: &LevelContext,
+    board: &Board,
+    base_score: &ScoreElement,
+    moves: &[Move],
+    scores: &[ScoreElement],
+    already_expanded: &[bool],
+    search_mode: SearchMode,
+) -> i32 {
+    if !matches!(
+        search_mode,
+        SearchMode::Normal | SearchMode::ForwardWithBases
+    ) {
+        return -1;
+    }
+    if ctx.level.box_count > 12 || ctx.level.index_num() > 80 {
+        return -1;
+    }
+    if ctx.level.indices_of_boxes(board).len() != ctx.level.indices_of_targets(board).len() {
+        return -1;
+    }
+
+    let mut base = *base_score;
+    let mut matched = scores.to_vec();
+    crate::analysis::match_distance::compute_match_distance(
+        &ctx.level,
+        &ctx.distances,
+        board,
+        &mut base,
+        moves,
+        &mut matched,
+    );
+
+    let mut best = -1i32;
+    let mut best_dist = base.dist_to_targets;
+    for (index, score) in scores.iter().enumerate() {
+        if already_expanded.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        if score.packed_boxes < base_score.packed_boxes {
+            continue;
+        }
+        let dist = matched[index].dist_to_targets;
+        if dist < best_dist {
+            best_dist = dist;
+            best = index as i32;
+        } else if dist == best_dist
+            && best >= 0
+            && is_better_score(score, &scores[best as usize], false, SearchMode::Normal)
+        {
+            best = index as i32;
+        }
+    }
+    best
 }
 
 /// Port of `set_default_advisor` (HF family).
@@ -219,6 +278,15 @@ pub fn set_advisors_inner(
     advisors.opener =
         opener::pick_opener(ctx, board, base_score, moves, scores, pull_mode, helper)?;
     advisors.explorer = opener::explorer(ctx, board, base_score, moves, scores, pull_mode);
+    advisors.matching = matching_advisor(
+        ctx,
+        board,
+        base_score,
+        moves,
+        scores,
+        already_expanded,
+        search_mode,
+    );
 
     Ok(advisors)
 }
@@ -233,6 +301,7 @@ pub fn is_an_advisor(advisors: &AdvisorsElement, son: usize) -> bool {
         || advisors.out_of_plan == son
         || advisors.explorer == son
         || advisors.imagine == son
+        || advisors.matching == son
 }
 
 #[cfg(test)]

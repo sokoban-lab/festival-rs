@@ -45,6 +45,18 @@ impl Perimeter {
         table.total_entries = 0;
     }
 
+    /// Copies the current entries into an independent perimeter.
+    pub fn snapshot(&self) -> Self {
+        let table = self.table.lock().expect("perimeter mutex");
+        Self {
+            table: Mutex::new(Table {
+                entries: table.entries.clone(),
+                total_entries: table.total_entries,
+            }),
+            log_size: self.log_size,
+        }
+    }
+
     pub fn total_entries(&self) -> usize {
         self.table.lock().expect("perimeter mutex").total_entries
     }
