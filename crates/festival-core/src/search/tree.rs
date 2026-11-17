@@ -1301,32 +1301,26 @@ impl Tree {
         let mut best_depth = i32::MAX;
         let mut best_son = -1i32;
 
-        for i in 0..count {
-            let move_hash = self.move_hashes[start + i];
-            let Some(depth) = perimeter.is_in(move_hash.hash, opposite_side) else {
-                continue;
-            };
-
-            if weight < 0 && depth as i32 >= e_depth {
-                continue;
+        let sons = &self.move_hashes[start..start + count];
+        let nodes = &self.nodes;
+        perimeter.for_each_hit(sons, opposite_side, |i, depth| {
+            let depth_i32 = depth as i32;
+            if weight < 0 && depth_i32 >= e_depth {
+                return;
             }
+            let move_hash = sons[i];
             if move_hash.deadlocked {
-                continue;
+                return;
             }
-
-            let node = self.nodes[move_hash.node as usize];
-            if node.deadlocked {
-                continue;
+            let node = nodes[move_hash.node as usize];
+            if node.deadlocked || node.expansion != NONE_EXPANSION {
+                return;
             }
-            if node.expansion != NONE_EXPANSION {
-                continue;
-            }
-
-            if (depth as i32) < best_depth {
-                best_depth = depth as i32;
+            if depth_i32 < best_depth {
+                best_depth = depth_i32;
                 best_son = i as i32;
             }
-        }
+        });
 
         if best_son == -1 {
             return false;

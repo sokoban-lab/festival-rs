@@ -106,7 +106,15 @@ fn matching_advisor(
     if ctx.level.box_count > 12 || ctx.level.index_num() > 80 {
         return -1;
     }
-    if ctx.level.indices_of_boxes(board).len() != ctx.level.indices_of_targets(board).len() {
+    let mut box_cnt = 0usize;
+    let mut tgt_cnt = 0usize;
+    let cells = board.cells();
+    for &(y, x) in &ctx.level.coords {
+        let c = cells[y as usize * crate::constants::MAX_SIZE + x as usize];
+        box_cnt += usize::from(c & crate::constants::BOX != 0);
+        tgt_cnt += usize::from(c & crate::constants::TARGET != 0);
+    }
+    if box_cnt != tgt_cnt {
         return -1;
     }
 

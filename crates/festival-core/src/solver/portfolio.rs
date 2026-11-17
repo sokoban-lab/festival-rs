@@ -71,7 +71,7 @@ pub fn run(
             Ok(helper) => helper,
             Err(_) => continue,
         };
-        let probe_perimeter = perimeter.snapshot();
+        let probe_perimeter = perimeter.overlay();
         let run = run_fess_into(
             ctx,
             &FessConfig {
@@ -125,10 +125,13 @@ pub fn run(
         }
     }
 
-    let (probe_perimeter, mut plan_helper) = match best {
-        Some((_, _, _, probe_perimeter, plan_helper)) => (probe_perimeter, plan_helper),
+    let mut plan_helper = match best {
+        Some((_, _, _, winning_overlay, plan_helper)) => {
+            winning_overlay.commit_to(perimeter);
+            plan_helper
+        }
         None => match prepare_plan(ctx, &plans[0], backward) {
-            Ok(plan_helper) => (perimeter.snapshot(), plan_helper),
+            Ok(plan_helper) => plan_helper,
             Err(_) => return Ok(None),
         },
     };
@@ -147,7 +150,7 @@ pub fn run(
         forward,
         tree,
         &mut plan_helper,
-        &probe_perimeter,
+        perimeter,
     )?;
     Ok(Some(PortfolioRun {
         solved: run.solved,
@@ -208,18 +211,18 @@ fn collect_plans(
         }
     });
 
+    let mut candidate = Helper::default();
     for id in ids.into_iter().take(512) {
         if plans.len() >= MAX_PLANS {
             break;
         }
-        let mut candidate = Helper::default();
         if park_order::get_parking_plan(ctx, tree, id, &mut candidate).is_err() {
             continue;
         }
         if candidate.parking_order.is_empty() || plans.contains(&candidate.parking_order) {
             continue;
         }
-        plans.push(candidate.parking_order);
+        plans.push(std::mem::take(&mut candidate.parking_order));
     }
     plans
 }

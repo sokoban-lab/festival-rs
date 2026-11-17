@@ -5,12 +5,41 @@
 //! every worker thread; single-core calls take an uncontended lock.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::{Arc, Mutex};
 
 use crate::constants::SearchMode;
 use crate::moves::apply_move;
 use crate::search::tree::Tree;
 use crate::solver::LevelContext;
+
+/// Fast deterministic mixer for keys that are already 64-bit board hashes.
+#[derive(Default)]
+struct U64Hasher(u64);
+
+impl Hasher for U64Hasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.wrapping_mul(0x100000001b3) ^ (b as u64);
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        let mut x = i;
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+        self.0 = x ^ (x >> 31);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<U64Hasher>>;
 
 #[derive(Clone, Copy, Debug)]
 struct Entry {
@@ -21,20 +50,22 @@ struct Entry {
 
 #[derive(Debug, Default)]
 struct Table {
-    entries: HashMap<u64, Entry>,
+    entries: FastMap<u64, Entry>,
     total_entries: usize,
 }
 
 #[derive(Debug)]
 pub struct Perimeter {
-    table: Mutex<Table>,
+    base: Option<Arc<Mutex<Table>>>,
+    table: Arc<Mutex<Table>>,
     log_size: u32,
 }
 
 impl Perimeter {
     pub fn new(log_size: u32) -> Self {
         Self {
-            table: Mutex::new(Table::default()),
+            base: None,
+            table: Arc::new(Mutex::new(Table::default())),
             log_size,
         }
     }
@@ -47,18 +78,64 @@ impl Perimeter {
 
     /// Copies the current entries into an independent perimeter.
     pub fn snapshot(&self) -> Self {
-        let table = self.table.lock().expect("perimeter mutex");
+        let mut merged = match &self.base {
+            Some(base) => {
+                let b = base.lock().expect("perimeter base mutex");
+                Table {
+                    entries: b.entries.clone(),
+                    total_entries: b.total_entries,
+                }
+            }
+            None => Table::default(),
+        };
+        let local = self.table.lock().expect("perimeter mutex");
+        if merged.entries.is_empty() {
+            merged.entries = local.entries.clone();
+            merged.total_entries = local.total_entries;
+        } else {
+            for (&hash, &entry) in &local.entries {
+                Self::store_in(&mut merged, hash, entry.depth, entry.side, entry.alg);
+            }
+        }
         Self {
-            table: Mutex::new(Table {
-                entries: table.entries.clone(),
-                total_entries: table.total_entries,
-            }),
+            base: None,
+            table: Arc::new(Mutex::new(merged)),
             log_size: self.log_size,
         }
     }
 
+    /// Creates a zero-copy write-isolated overlay over `self` for short
+    /// portfolio probes, avoiding cloning the reverse frontier table.
+    pub fn overlay(&self) -> Self {
+        let root = match &self.base {
+            Some(base) => Arc::clone(base),
+            None => Arc::clone(&self.table),
+        };
+        Self {
+            base: Some(root),
+            table: Arc::new(Mutex::new(Table::default())),
+            log_size: self.log_size,
+        }
+    }
+
+    /// Flushes this overlay's local writes into `target`.
+    pub fn commit_to(&self, target: &Self) {
+        let local = self.table.lock().expect("perimeter mutex");
+        if local.entries.is_empty() {
+            return;
+        }
+        let mut dst = target.table.lock().expect("perimeter target mutex");
+        for (&hash, &entry) in &local.entries {
+            Self::store_in(&mut dst, hash, entry.depth, entry.side, entry.alg);
+        }
+    }
+
     pub fn total_entries(&self) -> usize {
-        self.table.lock().expect("perimeter mutex").total_entries
+        let base_count = self
+            .base
+            .as_ref()
+            .map_or(0, |b| b.lock().expect("perimeter base mutex").total_entries);
+        base_count + self.table.lock().expect("perimeter mutex").total_entries
     }
 
     pub fn is_full(&self) -> bool {
@@ -166,7 +243,32 @@ impl Perimeter {
         let side = tree.pull_mode as u8;
         let alg = tree.search_mode as u8;
 
-        let mut entries = Vec::with_capacity(1 + usize::from(with_sons) * e.moves_num as usize);
+        let moves_num = usize::from(with_sons) * e.moves_num as usize;
+        if moves_num < 256 {
+            let mut stack_entries = [(0u64, 0u16); 256];
+            stack_entries[0] = (node_hash, e.depth as u16);
+            let mut len = 1usize;
+            if with_sons {
+                let start = e.move_hash_place;
+                let son_depth = (e.depth + 1) as u16;
+                for offset in 0..e.moves_num as usize {
+                    let hash = if tree.search_mode == SearchMode::BaseSearch {
+                        Self::hash_without_bases(ctx, tree, expansion, Some(offset))
+                    } else {
+                        tree.move_hashes[start + offset].hash
+                    };
+                    stack_entries[len] = (hash, son_depth);
+                    len += 1;
+                }
+            }
+            let mut table = self.table.lock().expect("perimeter mutex");
+            for &(hash, depth) in &stack_entries[..len] {
+                Self::store_in(&mut table, hash, depth, side, alg);
+            }
+            return len;
+        }
+
+        let mut entries = Vec::with_capacity(1 + moves_num);
         entries.push((node_hash, e.depth as u16));
         if with_sons {
             let start = e.move_hash_place;
@@ -181,21 +283,66 @@ impl Perimeter {
         }
 
         let mut table = self.table.lock().expect("perimeter mutex");
-        for (hash, depth) in &entries {
-            Self::store_in(&mut table, *hash, *depth, side, alg);
+        for &(hash, depth) in &entries {
+            Self::store_in(&mut table, hash, depth, side, alg);
         }
         entries.len()
     }
 
+    fn lookup_in_tables(
+        base: Option<&Table>,
+        local: &Table,
+        hash: u64,
+        side: u8,
+    ) -> Option<u16> {
+        let merged = match (base.and_then(|b| b.entries.get(&hash)), local.entries.get(&hash)) {
+            (Some(&b_ent), Some(&l_ent)) => {
+                let mut e = b_ent;
+                Self::update(&mut e, l_ent.depth, l_ent.side, l_ent.alg);
+                Some(e)
+            }
+            (None, Some(&l_ent)) => Some(l_ent),
+            (Some(&b_ent), None) => Some(b_ent),
+            (None, None) => None,
+        };
+        merged.filter(|entry| entry.side == side).map(|entry| entry.depth)
+    }
+
     /// Returns the stored depth when `hash` is on `side`.
     pub fn is_in(&self, hash: u64, side: u8) -> Option<u16> {
-        self.table
-            .lock()
-            .expect("perimeter mutex")
-            .entries
-            .get(&hash)
-            .filter(|entry| entry.side == side)
-            .map(|entry| entry.depth)
+        let local = self.table.lock().expect("perimeter mutex");
+        if let Some(base) = &self.base {
+            let b = base.lock().expect("perimeter base mutex");
+            Self::lookup_in_tables(Some(&b), &local, hash, side)
+        } else {
+            local
+                .entries
+                .get(&hash)
+                .filter(|entry| entry.side == side)
+                .map(|entry| entry.depth)
+        }
+    }
+
+    /// Evaluates all son hashes of an expansion under a single mutex lock,
+    /// calling `accept(son_idx, depth)` on hits.
+    pub fn for_each_hit(&self, sons: &[crate::search::tree::MoveHashData], side: u8, mut accept: impl FnMut(usize, u16)) {
+        let local = self.table.lock().expect("perimeter mutex");
+        if let Some(base) = &self.base {
+            let b = base.lock().expect("perimeter base mutex");
+            for (i, mh) in sons.iter().enumerate() {
+                if let Some(depth) = Self::lookup_in_tables(Some(&b), &local, mh.hash, side) {
+                    accept(i, depth);
+                }
+            }
+        } else {
+            for (i, mh) in sons.iter().enumerate() {
+                if let Some(entry) = local.entries.get(&mh.hash) {
+                    if entry.side == side {
+                        accept(i, entry.depth);
+                    }
+                }
+            }
+        }
     }
 
     /// `dragonfly_mark_visited_hashes`: `1` for an earlier dragonfly visit,
@@ -324,5 +471,22 @@ mod tests {
     #[test]
     fn dummy_tree_compiles() {
         assert!(dummy_tree().expansions.is_empty());
+    }
+
+    #[test]
+    fn overlay_isolates_probes_until_committed() {
+        let base = Perimeter::new(10);
+        base.store(100, 5, 1, 0);
+        let ov1 = base.overlay();
+        let ov2 = base.overlay();
+
+        ov1.store(200, 3, 0, 0);
+        assert_eq!(ov1.is_in(100, 1), Some(5));
+        assert_eq!(ov1.is_in(200, 0), Some(3));
+        assert_eq!(ov2.is_in(200, 0), None);
+        assert_eq!(base.is_in(200, 0), None);
+
+        ov1.commit_to(&base);
+        assert_eq!(base.is_in(200, 0), Some(3));
     }
 }
