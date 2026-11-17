@@ -1,7 +1,7 @@
 //! Naive scoring used by strategy H's forward search (`naive.cpp`).
 
 use crate::analysis::match_distance::{compute_base_distance, compute_match_distance};
-use crate::error::{Result, SolveError};
+use crate::error::Result;
 use crate::search::tree::{ExpansionId, Tree};
 use crate::solver::LevelContext;
 
@@ -21,10 +21,7 @@ pub fn set_naive_data_in_node(
     for i in 0..count {
         let move_hash = tree.move_hashes[start + i];
         moves.push(move_hash.move_data);
-        scores.push(
-            tree.get_score_of_hash(move_hash.hash)
-                .ok_or_else(|| SolveError::Internal("missing node".into()))?,
-        );
+        scores.push(tree.nodes[move_hash.node as usize].score);
     }
 
     let board = tree.expansion_board(expansion)?;
@@ -53,10 +50,7 @@ pub fn set_naive_data_in_node(
     tree.nodes[node as usize].score = base_score;
 
     for (i, score) in scores.iter().enumerate() {
-        let hash = tree.move_hashes[start + i].hash;
-        let place = tree
-            .find_node_by_hash(hash)
-            .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+        let place = tree.move_hashes[start + i].node;
         tree.nodes[place as usize].score.dist_to_targets = score.dist_to_targets;
     }
 

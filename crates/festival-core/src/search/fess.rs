@@ -73,10 +73,7 @@ fn has_winning_move(
 
     let mut winning_son = None;
     for son in 0..count {
-        let hash = tree.move_hashes[start + son].hash;
-        let node = tree
-            .find_node_by_hash(hash)
-            .ok_or_else(|| SolveError::Internal("has_winning_move: missing node".into()))?;
+        let node = tree.move_hashes[start + son].node;
         if tree.nodes[node as usize].score.boxes_on_targets == boxes_on_targets {
             winning_son = Some(son);
             break;
@@ -102,8 +99,10 @@ fn has_winning_move(
     tree.expansions[new_root as usize].father = expansion;
     tree.expansions[new_root as usize].depth = tree.expansions[expansion as usize].depth + 1;
 
-    let new_hash = tree.nodes[tree.expansions[new_root as usize].node as usize].hash;
+    let new_node = tree.expansions[new_root as usize].node;
+    let new_hash = tree.nodes[new_node as usize].hash;
     tree.move_hashes[start + son].hash = new_hash;
+    tree.move_hashes[start + son].node = new_node;
 
     Ok(true)
 }
@@ -412,6 +411,7 @@ mod tests {
 
         let place = tree.expansions[root as usize].move_hash_place;
         tree.move_hashes[place].hash = solved.hash();
+        tree.move_hashes[place].node = node;
 
         assert!(has_winning_move(&mut tree, root, &ctx, &mut helper).unwrap());
         let last = tree.last_expansion().unwrap();
@@ -420,6 +420,10 @@ mod tests {
         assert_eq!(
             tree.move_hashes[place].hash,
             tree.nodes[tree.expansions[last as usize].node as usize].hash
+        );
+        assert_eq!(
+            tree.move_hashes[place].node,
+            tree.expansions[last as usize].node
         );
     }
 

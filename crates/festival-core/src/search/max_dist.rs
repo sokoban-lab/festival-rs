@@ -32,12 +32,9 @@ pub fn set_max_dist_data_in_node(
     let mut moves = Vec::with_capacity(count);
     let mut scores: Vec<ScoreElement> = Vec::with_capacity(count);
     for i in 0..count {
-        let mv = tree.move_hashes[start + i].move_data;
-        moves.push(mv);
-        scores.push(
-            tree.get_score_of_hash(tree.move_hashes[start + i].hash)
-                .unwrap_or_default(),
-        );
+        let move_hash = tree.move_hashes[start + i];
+        moves.push(move_hash.move_data);
+        scores.push(tree.nodes[move_hash.node as usize].score);
     }
 
     let mut base_score = tree.nodes[node as usize].score;
@@ -52,10 +49,7 @@ pub fn set_max_dist_data_in_node(
     tree.nodes[node as usize].score = base_score;
 
     for (i, score) in scores.iter().enumerate() {
-        let hash = tree.move_hashes[start + i].hash;
-        let Some(place) = tree.find_node_by_hash(hash) else {
-            continue;
-        };
+        let place = tree.move_hashes[start + i].node;
         tree.nodes[place as usize].score.dist_to_targets = score.dist_to_targets;
     }
 

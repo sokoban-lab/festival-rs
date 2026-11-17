@@ -31,10 +31,7 @@ fn set_leaf_direction_in_tree(tree: &mut Tree) {
                 if tree.move_hashes[start + j].deadlocked {
                     continue;
                 }
-                let hash = tree.move_hashes[start + j].hash;
-                let Some(place) = tree.find_node_by_hash(hash) else {
-                    continue;
-                };
+                let place = tree.move_hashes[start + j].node;
                 if tree.nodes[place as usize].deadlocked {
                     tree.move_hashes[start + j].deadlocked = true;
                     continue;
@@ -86,10 +83,7 @@ pub fn check_cycle_deadlock(tree: &mut Tree, mut expansion: ExpansionId, ctx: &L
             let e = &tree.expansions[expansion as usize];
             (e.move_hash_place, e.leaf_direction as usize)
         };
-        let hash = tree.move_hashes[start + leaf].hash;
-        let Some(place) = tree.find_node_by_hash(hash) else {
-            break;
-        };
+        let place = tree.move_hashes[start + leaf].node;
         if tree.nodes[place as usize].deadlocked {
             break;
         }

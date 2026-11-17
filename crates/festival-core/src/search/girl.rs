@@ -164,10 +164,7 @@ impl Tree {
             if self.move_hashes[start + i].deadlocked {
                 continue;
             }
-            let hash = self.move_hashes[start + i].hash;
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+            let place = self.move_hashes[start + i].node;
             let value = score_to_value(&self.nodes[place as usize].score, self.pull_mode, girl);
             self.nodes[place as usize].score.value = value as f32;
         }
@@ -203,10 +200,7 @@ impl Tree {
             if self.move_hashes[start + i].deadlocked {
                 continue;
             }
-            let hash = self.move_hashes[start + i].hash;
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+            let place = self.move_hashes[start + i].node;
             let son_value = self.nodes[place as usize].score.value;
             if son_value > value {
                 value = son_value;
@@ -274,10 +268,7 @@ impl Tree {
             if self.move_hashes[start + i].deadlocked {
                 continue;
             }
-            let hash = self.move_hashes[start + i].hash;
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+            let place = self.move_hashes[start + i].node;
             let value = self.nodes[place as usize].score.value as f64;
             if best_son.is_none() || value > best_value {
                 best_value = value;
@@ -351,13 +342,10 @@ impl Tree {
             self.recompute_values(expansion)?;
             let son = self.pick_son_epsilon_greedy(expansion, ctx.girl.inv_epsilon)?;
 
-            let hash = {
+            let place = {
                 let e = &self.expansions[expansion as usize];
-                self.move_hashes[e.move_hash_place + son].hash
+                self.move_hashes[e.move_hash_place + son].node
             };
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("missing son".into()))?;
 
             let next = self.nodes[place as usize].expansion;
             if next != NONE_EXPANSION {
@@ -393,10 +381,7 @@ impl Tree {
                 if self.move_hashes[start + i].deadlocked {
                     continue;
                 }
-                let hash = self.move_hashes[start + i].hash;
-                let place = self
-                    .find_node_by_hash(hash)
-                    .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+                let place = self.move_hashes[start + i].node;
                 let value = self.nodes[place as usize].score.value;
                 if value > max_value {
                     max_value = value;

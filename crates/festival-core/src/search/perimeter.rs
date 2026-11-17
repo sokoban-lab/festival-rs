@@ -126,16 +126,15 @@ impl Perimeter {
         };
 
         if let Some(son) = son {
-            let hash = tree.move_hashes[e.move_hash_place + son].hash;
-            let Some(place) = tree.find_node_by_hash(hash) else {
-                return u64::MAX;
-            };
-            if tree.nodes[place as usize].score.boxes_in_level != ctx.level.box_count as i16 {
+            let move_hash = tree.move_hashes[e.move_hash_place + son];
+            if tree.nodes[move_hash.node as usize].score.boxes_in_level
+                != ctx.level.box_count as i16
+            {
                 return u64::MAX;
             }
             apply_move(
                 &mut board,
-                &tree.move_hashes[e.move_hash_place + son].move_data,
+                &move_hash.move_data,
                 SearchMode::Normal,
                 &ctx.level,
             );

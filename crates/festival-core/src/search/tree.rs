@@ -39,8 +39,11 @@ pub struct NodeElement {
 pub struct MoveHashData {
     pub move_data: Move,
     pub hash: u64,
+    pub node: NodeId,
     pub deadlocked: bool,
 }
+
+const _: () = assert!(std::mem::size_of::<MoveHashData>() == 32);
 
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionData {
@@ -234,39 +237,32 @@ impl Tree {
         (self.expansions.len() + 1) * self.board_stride >= self.max_boards_len
     }
 
+    #[inline]
+    fn probe_hash_slot(&self, hash: u64) -> (usize, Option<NodeId>) {
+        let mut index = (hash as usize) & self.mask;
+        loop {
+            let place = self.hash_array[index];
+            if place == NONE_NODE {
+                return (index, None);
+            }
+            if self.nodes[place as usize].hash == hash {
+                return (index, Some(place));
+            }
+            index = (index + 1) & self.mask;
+        }
+    }
+
     pub fn find_node_by_hash(&self, hash: u64) -> Option<NodeId> {
-        let mut index = (hash as usize) & self.mask;
-        loop {
-            let place = self.hash_array[index];
-            if place == NONE_NODE {
-                return None;
-            }
-            if self.nodes[place as usize].hash == hash {
-                return Some(place);
-            }
-            index = (index + 1) & self.mask;
-        }
+        self.probe_hash_slot(hash).1
     }
 
-    fn add_entry_to_hash_array(&mut self, hash: u64, node: NodeId) -> Result<()> {
-        let mut index = (hash as usize) & self.mask;
-        loop {
-            let place = self.hash_array[index];
-            if place == NONE_NODE {
-                self.hash_array[index] = node;
-                return Ok(());
-            }
-            if self.nodes[place as usize].hash == hash {
-                return Err(SolveError::Internal("adding existing hash".into()));
-            }
-            index = (index + 1) & self.mask;
-        }
-    }
-
-    fn add_node_to_tree(&mut self, hash: u64, score: ScoreElement) -> Result<NodeId> {
-        if self.find_node_by_hash(hash).is_some() {
-            return Err(SolveError::Internal("adding existing hash".into()));
-        }
+    fn add_node_at_slot(
+        &mut self,
+        slot: usize,
+        hash: u64,
+        score: ScoreElement,
+    ) -> Result<NodeId> {
+        debug_assert_eq!(self.hash_array[slot], NONE_NODE);
         if self.nodes.len() >= self.max_nodes {
             return Err(SolveError::ResourceExhausted);
         }
@@ -278,8 +274,16 @@ impl Tree {
             expansion: NONE_EXPANSION,
             deadlocked: false,
         });
-        self.add_entry_to_hash_array(hash, place)?;
+        self.hash_array[slot] = place;
         Ok(place)
+    }
+
+    fn add_node_to_tree(&mut self, hash: u64, score: ScoreElement) -> Result<NodeId> {
+        let (slot, existing) = self.probe_hash_slot(hash);
+        if existing.is_some() {
+            return Err(SolveError::Internal("adding existing hash".into()));
+        }
+        self.add_node_at_slot(slot, hash, score)
     }
 
     pub fn board_is_in_tree(&self, board: &Board) -> bool {
@@ -350,14 +354,14 @@ impl Tree {
         let hash = board.hash();
         let score = score_board(ctx, helper, &board, self.pull_mode, self.search_mode);
 
-        let node = match self.find_node_by_hash(hash) {
-            Some(node) => {
+        let node = match self.probe_hash_slot(hash) {
+            (_, Some(node)) => {
                 if self.nodes[node as usize].expansion != NONE_EXPANSION {
                     return Err(SolveError::Internal("root is already in tree".into()));
                 }
                 node
             }
-            None => self.add_node_to_tree(hash, score)?,
+            (slot, None) => self.add_node_at_slot(slot, hash, score)?,
         };
 
         let id = self.expansions.len() as ExpansionId;
@@ -425,15 +429,19 @@ impl Tree {
             let mut child = board;
             apply_move(&mut child, &mv, self.search_mode, &ctx.level);
             let hash = child.hash();
+            let node = match self.probe_hash_slot(hash) {
+                (_, Some(existing)) => existing,
+                (slot, None) => {
+                    let score = score_board(ctx, helper, &child, self.pull_mode, self.search_mode);
+                    self.add_node_at_slot(slot, hash, score)?
+                }
+            };
             self.move_hashes.push(MoveHashData {
                 move_data: mv,
                 hash,
+                node,
                 deadlocked: false,
             });
-            if self.find_node_by_hash(hash).is_none() {
-                let score = score_board(ctx, helper, &child, self.pull_mode, self.search_mode);
-                self.add_node_to_tree(hash, score)?;
-            }
         }
 
         let moves_num = self.move_hashes.len() - move_hash_place;
@@ -455,10 +463,7 @@ impl Tree {
         let mut leaf = -1;
         if !self.nodes[node as usize].deadlocked {
             for i in 0..count {
-                let hash = self.move_hashes[start + i].hash;
-                let Some(place) = self.find_node_by_hash(hash) else {
-                    continue;
-                };
+                let place = self.move_hashes[start + i].node;
                 let child = self.nodes[place as usize];
                 if child.deadlocked {
                     continue;
@@ -550,11 +555,9 @@ impl Tree {
                 if self.move_hashes[start + i].deadlocked {
                     continue;
                 }
-                let hash = self.move_hashes[start + i].hash;
-                if let Some(place) = self.find_node_by_hash(hash) {
-                    if self.nodes[place as usize].deadlocked {
-                        self.move_hashes[start + i].deadlocked = true;
-                    }
+                let place = self.move_hashes[start + i].node;
+                if self.nodes[place as usize].deadlocked {
+                    self.move_hashes[start + i].deadlocked = true;
                 }
             }
 
@@ -595,10 +598,7 @@ impl Tree {
                 continue;
             }
 
-            let Some(place) = self.find_node_by_hash(move_hash.hash) else {
-                continue;
-            };
-            let child = self.nodes[place as usize];
+            let child = self.nodes[move_hash.node as usize];
 
             if child.expansion != NONE_EXPANSION {
                 continue;
@@ -668,13 +668,10 @@ impl Tree {
 
         for i in 0..count {
             let move_hash = self.move_hashes[start + i];
+            let child = self.nodes[move_hash.node as usize];
             moves.push(move_hash.move_data);
-            scores.push(self.get_score_of_hash(move_hash.hash).unwrap_or_default());
-            already_expanded.push(
-                self.find_node_by_hash(move_hash.hash)
-                    .map(|place| self.nodes[place as usize].expansion != NONE_EXPANSION)
-                    .unwrap_or(false),
-            );
+            scores.push(child.score);
+            already_expanded.push(child.expansion != NONE_EXPANSION);
         }
 
         let advisors = set_advisors_inner(
@@ -738,21 +735,16 @@ impl Tree {
             let mut moves = Vec::with_capacity(count);
             let mut scores = Vec::with_capacity(count);
             for i in 0..count {
-                moves.push(self.move_hashes[start + i].move_data);
-                scores.push(
-                    self.get_score_of_hash(self.move_hashes[start + i].hash)
-                        .unwrap_or_default(),
-                );
+                let move_hash = self.move_hashes[start + i];
+                moves.push(move_hash.move_data);
+                scores.push(self.nodes[move_hash.node as usize].score);
             }
 
             let mut base_score = self.nodes[node as usize].score;
             hf::set_rev_distance(ctx, helper, &board, &mut base_score, &moves, &mut scores);
             self.nodes[node as usize].score = base_score;
             for (i, score) in scores.iter().enumerate() {
-                let hash = self.move_hashes[start + i].hash;
-                let Some(place) = self.find_node_by_hash(hash) else {
-                    continue;
-                };
+                let place = self.move_hashes[start + i].node;
                 self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
             }
             return Ok(());
@@ -789,11 +781,9 @@ impl Tree {
         let mut moves = Vec::with_capacity(count);
         let mut scores = Vec::with_capacity(count);
         for i in 0..count {
-            moves.push(self.move_hashes[start + i].move_data);
-            scores.push(
-                self.get_score_of_hash(self.move_hashes[start + i].hash)
-                    .unwrap_or_default(),
-            );
+            let move_hash = self.move_hashes[start + i];
+            moves.push(move_hash.move_data);
+            scores.push(self.nodes[move_hash.node as usize].score);
         }
 
         let mut base_score = self.nodes[node as usize].score;
@@ -810,10 +800,7 @@ impl Tree {
         self.nodes[node as usize].score = base_score;
 
         for (i, score) in scores.iter().enumerate() {
-            let hash = self.move_hashes[start + i].hash;
-            let Some(place) = self.find_node_by_hash(hash) else {
-                continue;
-            };
+            let place = self.move_hashes[start + i].node;
             self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
         }
 
@@ -839,18 +826,13 @@ impl Tree {
         if self.move_hashes[index].deadlocked {
             return false;
         }
-        let Some(place) = self.find_node_by_hash(self.move_hashes[index].hash) else {
-            return false;
-        };
+        let place = self.move_hashes[index].node;
         let child = &mut self.nodes[place as usize];
         if child.deadlocked {
             self.move_hashes[index].deadlocked = true;
             return false;
         }
-        if child.expansion != NONE_EXPANSION {
-            return false;
-        }
-        true
+        child.expansion == NONE_EXPANSION
     }
 
     /// Pops queue entries until an expansion with a playable best move is
@@ -914,9 +896,7 @@ impl Tree {
         };
 
         let move_hash = self.move_hashes[parent_start + son];
-        let Some(node) = self.find_node_by_hash(move_hash.hash) else {
-            return Err(SolveError::Internal("missing node".into()));
-        };
+        let node = move_hash.node;
         let node_element = self.nodes[node as usize];
         if node_element.expansion != NONE_EXPANSION {
             return Err(SolveError::Internal("already expanded".into()));
@@ -998,10 +978,7 @@ impl Tree {
         };
 
         for i in 0..count {
-            let hash = self.move_hashes[start + i].hash;
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("block_existing_sons: missing node".into()))?;
+            let place = self.move_hashes[start + i].node;
             if (place as usize) < nodes_before_expansion {
                 self.move_hashes[start + i].deadlocked = true;
             }
@@ -1037,9 +1014,7 @@ impl Tree {
         son: usize,
     ) -> Result<()> {
         let index = self.expansions[expansion as usize].move_hash_place + son;
-        let Some(place) = self.find_node_by_hash(self.move_hashes[index].hash) else {
-            return Err(SolveError::Internal("missing node".into()));
-        };
+        let place = self.move_hashes[index].node;
         if self.nodes[place as usize].deadlocked {
             return Err(SolveError::Internal("already deadlocked".into()));
         }
@@ -1067,10 +1042,7 @@ impl Tree {
         };
         for i in 0..count {
             self.move_hashes[start + i].deadlocked = true;
-            let hash = self.move_hashes[start + i].hash;
-            let place = self
-                .find_node_by_hash(hash)
-                .ok_or_else(|| SolveError::Internal("missing node".into()))?;
+            let place = self.move_hashes[start + i].node;
             if self.nodes[place as usize].expansion == NONE_EXPANSION {
                 self.nodes[place as usize].deadlocked = true;
             } else {
@@ -1138,10 +1110,9 @@ impl Tree {
             return Err(SolveError::Internal("no father".into()));
         }
         let father = &self.expansions[e.father as usize];
-        let target_hash = self.nodes[e.node as usize].hash;
         for i in 0..father.moves_num as usize {
             let move_hash = &self.move_hashes[father.move_hash_place + i];
-            if move_hash.hash == target_hash {
+            if move_hash.node == e.node {
                 return Ok(move_hash.move_data);
             }
         }
@@ -1301,11 +1272,7 @@ impl Tree {
                 continue;
             }
             for i in 0..e.moves_num as usize {
-                let Some(place) =
-                    self.find_node_by_hash(self.move_hashes[e.move_hash_place + i].hash)
-                else {
-                    continue;
-                };
+                let place = self.move_hashes[e.move_hash_place + i].node;
                 let node = self.nodes[place as usize];
                 if !node.deadlocked && node.expansion == NONE_EXPANSION {
                     return true;
@@ -1337,22 +1304,19 @@ impl Tree {
         let mut best_son = -1i32;
 
         for i in 0..count {
-            let hash = self.move_hashes[start + i].hash;
-            let Some(depth) = perimeter.is_in(hash, opposite_side) else {
+            let move_hash = self.move_hashes[start + i];
+            let Some(depth) = perimeter.is_in(move_hash.hash, opposite_side) else {
                 continue;
             };
 
             if weight < 0 && depth as i32 >= e_depth {
                 continue;
             }
-            if self.move_hashes[start + i].deadlocked {
+            if move_hash.deadlocked {
                 continue;
             }
 
-            let Some(place) = self.find_node_by_hash(hash) else {
-                continue;
-            };
-            let node = self.nodes[place as usize];
+            let node = self.nodes[move_hash.node as usize];
             if node.deadlocked {
                 continue;
             }
