@@ -70,6 +70,49 @@ impl Default for Helper {
 }
 
 impl Helper {
+    /// Lightweight constructor for auxiliary deadlock searches (`MiniSearch`,
+    /// `DeadlockSearch`, `WobblersSearch`, `RoomsDeadlockSearch`, `XySearch`,
+    /// `KDistSearch`) that never use the solution vector or planning fields.
+    pub fn new_aux() -> Self {
+        let zero = Board::new(crate::constants::MAX_SIZE, crate::constants::MAX_SIZE)
+            .expect("MAX_SIZE board");
+        Self {
+            requests: RequestData::default(),
+            perimeter_found: false,
+            enable_inefficient_moves: false,
+            weighted_search: true,
+            level_solved: false,
+            sol_moves: Vec::new(),
+            alg_type: 0,
+            used_in_plan: zero,
+            imagined_hf_board: zero,
+            wallified: zero,
+            k_dist_value: 0,
+            tested_deadlock_room: 0,
+            scored_distance: [INF; MAX_INNER],
+            parking_order: Vec::new(),
+            full_parking_order: Vec::new(),
+            boxes_were_removed: false,
+            oop: None,
+            imagine: None,
+            move_scratch: Vec::new(),
+            graph_scratch: None,
+        }
+    }
+
+    /// Resets the scalar flags used by auxiliary deadlock searches while
+    /// retaining `move_scratch` and `graph_scratch`.
+    #[inline]
+    pub fn reset_for_aux_search(&mut self) {
+        self.perimeter_found = false;
+        self.enable_inefficient_moves = false;
+        self.weighted_search = true;
+        self.level_solved = false;
+        self.alg_type = 0;
+        self.k_dist_value = 0;
+        self.tested_deadlock_room = 0;
+    }
+
     /// Clears everything C++ `reset_helper` clears, plus the planning data.
     pub fn reset(&mut self) {
         self.requests.clear();

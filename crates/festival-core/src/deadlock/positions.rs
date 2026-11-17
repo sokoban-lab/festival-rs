@@ -63,14 +63,67 @@ impl Position {
 
 pub struct PositionSet {
     pub positions: Vec<Position>,
+    spare_positions: Vec<Position>,
     capacity: usize,
+    seen_move_buckets: [u64; 16],
+    unique_moves_est: usize,
 }
 
 impl PositionSet {
     pub fn new(capacity: usize) -> Self {
         Self {
             positions: Vec::with_capacity(capacity),
+            spare_positions: Vec::new(),
             capacity,
+            seen_move_buckets: [0; 16],
+            unique_moves_est: 0,
+        }
+    }
+
+    /// Recycles all `Position` allocations for a fresh auxiliary search.
+    pub fn reset_with_capacity(&mut self, capacity: usize) {
+        self.spare_positions.append(&mut self.positions);
+        if self.positions.capacity() < capacity {
+            self.positions.reserve(capacity - self.positions.capacity());
+        }
+        self.capacity = capacity;
+        self.seen_move_buckets = [0; 16];
+        self.unique_moves_est = 0;
+    }
+
+    fn alloc_position(&mut self, board: Board, pull_mode: bool, search_mode: SearchMode) -> Position {
+        if let Some(mut p) = self.spare_positions.pop() {
+            p.moves.clear();
+            p.scores.clear();
+            p.hashes.clear();
+            p.place_in_positions.clear();
+            p.move_deadlocked.clear();
+            p.board = board;
+            p.father = None;
+            p.depth = 0;
+            p.position_score = ScoreElement::default();
+            p.position_hash = 0;
+            p.position_deadlocked = false;
+            p.weight = 0;
+            p.pull_mode = pull_mode;
+            p.has_corral = false;
+            p.hash_indicators = [0; 64];
+            p.search_mode = search_mode;
+            p
+        } else {
+            Position::empty(board, pull_mode, search_mode)
+        }
+    }
+
+    fn record_move_buckets(&mut self, hashes: &[u64]) {
+        for &hash in hashes {
+            let bucket = (hash & 0x3ff) as usize;
+            let word = bucket >> 6;
+            let mask = 1u64 << (bucket & 63);
+            if self.seen_move_buckets[word] & mask == 0 {
+                self.seen_move_buckets[word] |= mask;
+                self.unique_moves_est += 1;
+            }
         }
     }
 
@@ -121,7 +174,8 @@ impl PositionSet {
     }
 
     fn set_place_in_positions(&self, p: &mut Position, existing: usize) {
-        p.place_in_positions = vec![None; p.moves.len()];
+        p.place_in_positions.clear();
+        p.place_in_positions.resize(p.moves.len(), None);
 
         let mut indicators = [0u64; 256];
         for &hash in &p.hashes {
@@ -160,11 +214,11 @@ impl PositionSet {
         let (moves, has_corral) =
             find_possible_moves(ctx, &board, pull_mode, search_mode, helper, deadlock)?;
 
-        let mut p = Position::empty(board, pull_mode, search_mode);
+        let mut p = self.alloc_position(board, pull_mode, search_mode);
         p.has_corral = has_corral;
         p.position_score = score_board(ctx, helper, &board, pull_mode, search_mode);
-        p.moves = moves;
-        p.move_deadlocked = vec![false; p.moves.len()];
+        p.moves.extend_from_slice(&moves);
+        p.move_deadlocked.resize(p.moves.len(), false);
         p.position_hash = board.hash();
         self.set_scores_to_moves(
             ctx,
@@ -177,6 +231,7 @@ impl PositionSet {
             &mut p.scores,
         );
         p.set_hash_indicators();
+        self.record_move_buckets(&p.hashes);
         let existing = self.positions.len();
         self.set_place_in_positions(&mut p, existing);
         self.positions.push(p);
@@ -208,22 +263,18 @@ impl PositionSet {
         let mut board = self.positions[node].board;
         let mv = self.positions[node].moves[son];
         apply_move(&mut board, &mv, search_mode, &ctx.level);
-        if board.hash() != expected_hash {
-            return Err(crate::error::SolveError::Internal(
-                "position hash mismatch".into(),
-            ));
-        }
+        debug_assert_eq!(board.hash(), expected_hash, "position hash mismatch");
 
         let (moves, has_corral) =
             find_possible_moves(ctx, &board, pull_mode, search_mode, helper, deadlock)?;
 
-        let mut p = Position::empty(board, pull_mode, search_mode);
+        let mut p = self.alloc_position(board, pull_mode, search_mode);
         p.father = Some(node);
         p.depth = self.positions[node].depth + 1;
         p.has_corral = has_corral;
         p.position_score = self.positions[node].scores[son];
-        p.moves = moves;
-        p.move_deadlocked = vec![false; p.moves.len()];
+        p.moves.extend_from_slice(&moves);
+        p.move_deadlocked.resize(p.moves.len(), false);
         p.weight = self.positions[node].weight + self.positions[node].moves[son].attr.weight as i32;
         self.set_scores_to_moves(
             ctx,
@@ -236,6 +287,7 @@ impl PositionSet {
             &mut p.scores,
         );
         p.set_hash_indicators();
+        self.record_move_buckets(&p.hashes);
         let existing = self.positions.len();
         self.set_place_in_positions(&mut p, existing);
         p.position_hash = expected_hash;
@@ -369,20 +421,9 @@ impl PositionSet {
             .position(|position| position.position_hash == hash)
     }
 
+    #[inline]
     pub fn estimate_uniqe_moves(&self) -> usize {
-        let mut seen = [false; 1024];
-        let mut sum = 0;
-        for position in &self.positions {
-            for &hash in &position.hashes {
-                seen[(hash & 0x3ff) as usize] = true;
-            }
-        }
-        for value in seen {
-            if value {
-                sum += 1;
-            }
-        }
-        sum
+        self.unique_moves_est
     }
 
     pub fn show_position_path(&self, mut p: Option<usize>) -> Vec<usize> {

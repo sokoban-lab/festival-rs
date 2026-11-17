@@ -5,7 +5,6 @@ use crate::constants::*;
 use crate::deadlock::positions::PositionSet;
 use crate::deadlock::state::DeadlockState;
 use crate::error::Result;
-use crate::search::helper::Helper;
 use crate::solver::LevelContext;
 
 fn get_move_with_most_packing(positions: &PositionSet) -> Option<(usize, usize)> {
@@ -57,44 +56,51 @@ pub fn can_put_all_on_targets(
     board: &Board,
     max_size: usize,
 ) -> Result<i32> {
-    let mut helper = Helper::default();
-    let mut positions = PositionSet::new(max_size);
-    positions.set_first_position(
-        ctx,
-        board,
-        false,
-        SearchMode::MiniSearch,
-        &mut helper,
-        deadlock,
-    )?;
-    let mut pos_num = positions.len();
+    let mut helper = deadlock.take_aux_helper();
+    let mut positions = deadlock.take_position_set(max_size);
 
-    loop {
-        let last = pos_num - 1;
-        if positions.positions[last].moves.len() > 1000 {
-            return Ok(-1);
+    let outcome = (|| -> Result<i32> {
+        positions.set_first_position(
+            ctx,
+            board,
+            false,
+            SearchMode::MiniSearch,
+            &mut helper,
+            deadlock,
+        )?;
+        let mut pos_num = positions.len();
+
+        loop {
+            let last = pos_num - 1;
+            if positions.positions[last].moves.len() > 1000 {
+                return Ok(-1);
+            }
+            if has_a_move_with_all_boxes_packed(&positions, last) {
+                return Ok(1);
+            }
+
+            let Some((pos, son)) = get_move_with_most_packing(&positions) else {
+                return Ok(0);
+            };
+
+            positions.expand_position(ctx, pos, son, false, &mut helper, deadlock)?;
+            pos_num = positions.len();
+
+            let last = pos_num - 1;
+            if positions.positions[last]
+                .board
+                .all_boxes_in_place(false, &ctx.level.initial)
+            {
+                return Ok(1);
+            }
+
+            if pos_num == max_size {
+                return Ok(-1);
+            }
         }
-        if has_a_move_with_all_boxes_packed(&positions, last) {
-            return Ok(1);
-        }
+    })();
 
-        let Some((pos, son)) = get_move_with_most_packing(&positions) else {
-            return Ok(0);
-        };
-
-        positions.expand_position(ctx, pos, son, false, &mut helper, deadlock)?;
-        pos_num = positions.len();
-
-        let last = pos_num - 1;
-        if positions.positions[last]
-            .board
-            .all_boxes_in_place(false, &ctx.level.initial)
-        {
-            return Ok(1);
-        }
-
-        if pos_num == max_size {
-            return Ok(-1);
-        }
-    }
+    deadlock.put_position_set(positions);
+    deadlock.put_aux_helper(helper);
+    outcome
 }

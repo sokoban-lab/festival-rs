@@ -10,8 +10,11 @@ use crate::board::Board;
 use crate::deadlock::cache::DeadlockCache;
 use crate::deadlock::k_dist::KDistHash;
 use crate::deadlock::mpdb::Mpdb;
+use crate::deadlock::positions::PositionSet;
 use crate::deadlock::rooms::init_rooms_deadlock;
 use crate::deadlock::stuck::StuckPatterns;
+use crate::graph::Graph;
+use crate::search::helper::Helper;
 use crate::solver::LevelContext;
 
 /// C++ sizes the process-wide cache by core count; each Rust worker owns the
@@ -31,6 +34,9 @@ pub struct DeadlockState {
     pub stuck: StuckPatterns,
     pub rooms: RoomsDeadlockData,
     pub envelopes: EnvelopePatterns,
+    pub(crate) matching_graph: Option<Graph>,
+    helper_pool: Vec<Helper>,
+    position_set_pool: Vec<PositionSet>,
     /// C++ registers mini-corral patterns only at `verbose >= 4`.
     pub learn_mini_corral: bool,
     /// Disabling the cache must not change any verdict (Gate G3).
@@ -59,10 +65,41 @@ impl DeadlockState {
                 room_size: Vec::new(),
             },
             envelopes: EnvelopePatterns::new(),
+            matching_graph: None,
+            helper_pool: Vec::new(),
+            position_set_pool: Vec::new(),
             learn_mini_corral: false,
             cache_enabled: true,
             suppress_cache_writes: false,
         }
+    }
+
+    pub(crate) fn take_aux_helper(&mut self) -> Helper {
+        match self.helper_pool.pop() {
+            Some(mut helper) => {
+                helper.reset_for_aux_search();
+                helper
+            }
+            None => Helper::new_aux(),
+        }
+    }
+
+    pub(crate) fn put_aux_helper(&mut self, helper: Helper) {
+        self.helper_pool.push(helper);
+    }
+
+    pub(crate) fn take_position_set(&mut self, capacity: usize) -> PositionSet {
+        match self.position_set_pool.pop() {
+            Some(mut ps) => {
+                ps.reset_with_capacity(capacity);
+                ps
+            }
+            None => PositionSet::new(capacity),
+        }
+    }
+
+    pub(crate) fn put_position_set(&mut self, ps: PositionSet) {
+        self.position_set_pool.push(ps);
     }
 
     /// Cached verdict for marking sons / skipping repeated searches.
@@ -175,5 +212,6 @@ impl DeadlockState {
         self.k_dist.clear();
         self.stuck.clear();
         self.envelopes.clear();
+        self.matching_graph = None;
     }
 }

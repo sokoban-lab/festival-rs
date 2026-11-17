@@ -7,7 +7,6 @@ use crate::deadlock::state::{DeadlockState, RoomsDeadlockData};
 use crate::deadlock::{IS_DEADLOCK, NOT_DEADLOCK, SEARCH_EXCEEDED};
 use crate::error::Result;
 use crate::moves::Move;
-use crate::search::helper::Helper;
 use crate::search::score::ScoreElement;
 use crate::solver::LevelContext;
 
@@ -147,45 +146,50 @@ fn rooms_deadlock_search_actual(
     pull_mode: bool,
     tested_deadlock_room: usize,
 ) -> Result<i8> {
-    let mut helper = Helper {
-        tested_deadlock_room,
-        ..Helper::default()
-    };
     if board.all_boxes_in_place(pull_mode, &ctx.level.initial) {
         return Ok(NOT_DEADLOCK);
     }
 
-    let mut positions = PositionSet::new(MAX_ROOMS_DEADLOCK_SEARCH);
-    positions.set_first_position(
-        ctx,
-        board,
-        pull_mode,
-        SearchMode::RoomsDeadlockSearch,
-        &mut helper,
-        state,
-    )?;
+    let mut helper = state.take_aux_helper();
+    helper.tested_deadlock_room = tested_deadlock_room;
+    let mut positions = state.take_position_set(MAX_ROOMS_DEADLOCK_SEARCH);
 
-    let result = loop {
-        if positions.estimate_uniqe_moves() > MAX_ROOMS_DEADLOCK_SEARCH {
-            break SEARCH_EXCEEDED;
-        }
-        let Some((pos, son)) = get_best_rooms_deadlock_move(&positions) else {
-            break IS_DEADLOCK;
+    let outcome = (|| -> Result<i8> {
+        positions.set_first_position(
+            ctx,
+            board,
+            pull_mode,
+            SearchMode::RoomsDeadlockSearch,
+            &mut helper,
+            state,
+        )?;
+
+        let result = loop {
+            if positions.estimate_uniqe_moves() > MAX_ROOMS_DEADLOCK_SEARCH {
+                break SEARCH_EXCEEDED;
+            }
+            let Some((pos, son)) = get_best_rooms_deadlock_move(&positions) else {
+                break IS_DEADLOCK;
+            };
+            positions.expand_position(ctx, pos, son, pull_mode, &mut helper, state)?;
+            let last = positions.len() - 1;
+            if positions.positions[last]
+                .board
+                .all_boxes_in_place(pull_mode, &ctx.level.initial)
+            {
+                break NOT_DEADLOCK;
+            }
+            if positions.len() == MAX_ROOMS_DEADLOCK_SEARCH {
+                break SEARCH_EXCEEDED;
+            }
         };
-        positions.expand_position(ctx, pos, son, pull_mode, &mut helper, state)?;
-        let last = positions.len() - 1;
-        if positions.positions[last]
-            .board
-            .all_boxes_in_place(pull_mode, &ctx.level.initial)
-        {
-            break NOT_DEADLOCK;
-        }
-        if positions.len() == MAX_ROOMS_DEADLOCK_SEARCH {
-            break SEARCH_EXCEEDED;
-        }
-    };
 
-    Ok(result)
+        Ok(result)
+    })();
+
+    state.put_position_set(positions);
+    state.put_aux_helper(helper);
+    outcome
 }
 
 fn rooms_deadlock_search(

@@ -915,9 +915,7 @@ impl Tree {
             self.search_mode,
             &ctx.level,
         );
-        if board.hash() != move_hash.hash {
-            return Err(SolveError::Internal("hash error".into()));
-        }
+        debug_assert_eq!(board.hash(), move_hash.hash, "hash error");
 
         let id = self.expansions.len() as ExpansionId;
         self.nodes[node as usize].expansion = id;

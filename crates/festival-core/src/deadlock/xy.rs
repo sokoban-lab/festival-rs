@@ -7,7 +7,6 @@ use crate::deadlock::state::DeadlockState;
 use crate::deadlock::{IS_DEADLOCK, NOT_DEADLOCK, SEARCH_EXCEEDED};
 use crate::error::Result;
 use crate::moves::{Move, apply_move, find_possible_moves};
-use crate::search::helper::Helper;
 use crate::search::score::ScoreElement;
 use crate::solver::LevelContext;
 
@@ -114,42 +113,49 @@ fn xy_search_actual(
     pull_mode: bool,
     max_positions: usize,
 ) -> Result<i8> {
-    let mut helper = Helper::default();
     if board.all_boxes_in_place(pull_mode, &ctx.level.initial) {
         return Ok(NOT_DEADLOCK);
     }
 
-    let mut positions = PositionSet::new(max_positions);
-    positions.set_first_position(
-        ctx,
-        board,
-        pull_mode,
-        SearchMode::XySearch,
-        &mut helper,
-        state,
-    )?;
+    let mut helper = state.take_aux_helper();
+    let mut positions = state.take_position_set(max_positions);
 
-    let result = loop {
-        if positions.estimate_uniqe_moves() > max_positions {
-            break SEARCH_EXCEEDED;
-        }
-        let Some((pos, son)) = get_best_xy_move(&positions) else {
-            break IS_DEADLOCK;
+    let outcome = (|| -> Result<i8> {
+        positions.set_first_position(
+            ctx,
+            board,
+            pull_mode,
+            SearchMode::XySearch,
+            &mut helper,
+            state,
+        )?;
+
+        let result = loop {
+            if positions.estimate_uniqe_moves() > max_positions {
+                break SEARCH_EXCEEDED;
+            }
+            let Some((pos, son)) = get_best_xy_move(&positions) else {
+                break IS_DEADLOCK;
+            };
+            positions.expand_position(ctx, pos, son, pull_mode, &mut helper, state)?;
+            let last = positions.len() - 1;
+            if positions.positions[last]
+                .board
+                .all_boxes_in_place(pull_mode, &ctx.level.initial)
+            {
+                break NOT_DEADLOCK;
+            }
+            if positions.len() == max_positions {
+                break SEARCH_EXCEEDED;
+            }
         };
-        positions.expand_position(ctx, pos, son, pull_mode, &mut helper, state)?;
-        let last = positions.len() - 1;
-        if positions.positions[last]
-            .board
-            .all_boxes_in_place(pull_mode, &ctx.level.initial)
-        {
-            break NOT_DEADLOCK;
-        }
-        if positions.len() == max_positions {
-            break SEARCH_EXCEEDED;
-        }
-    };
 
-    Ok(result)
+        Ok(result)
+    })();
+
+    state.put_position_set(positions);
+    state.put_aux_helper(helper);
+    outcome
 }
 
 pub fn xy_deadlock_search(
@@ -181,24 +187,28 @@ pub fn clear_xy_boxes(
     board: &mut Board,
     pull_mode: bool,
 ) -> Result<()> {
-    let mut helper = Helper::default();
-    loop {
-        let (moves, _) = find_possible_moves(
-            ctx,
-            board,
-            pull_mode,
-            SearchMode::XySearch,
-            &mut helper,
-            state,
-        )?;
-        if !moves.is_empty() && moves[0].kill {
-            let (y, x) = ctx.level.coord(moves[0].from as usize);
-            board.and_not(y, x, BOX);
-            board.expand_sokoban_cloud();
-        } else {
-            return Ok(());
+    let mut helper = state.take_aux_helper();
+    let outcome = (|| -> Result<()> {
+        loop {
+            let (moves, _) = find_possible_moves(
+                ctx,
+                board,
+                pull_mode,
+                SearchMode::XySearch,
+                &mut helper,
+                state,
+            )?;
+            if !moves.is_empty() && moves[0].kill {
+                let (y, x) = ctx.level.coord(moves[0].from as usize);
+                board.and_not(y, x, BOX);
+                board.expand_sokoban_cloud();
+            } else {
+                return Ok(());
+            }
         }
-    }
+    })();
+    state.put_aux_helper(helper);
+    outcome
 }
 
 pub fn is_xy_deadlock(

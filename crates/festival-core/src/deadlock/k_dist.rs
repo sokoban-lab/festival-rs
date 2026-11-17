@@ -7,7 +7,6 @@ use crate::deadlock::positions::PositionSet;
 use crate::deadlock::state::DeadlockState;
 use crate::error::Result;
 use crate::moves::{Move, apply_move};
-use crate::search::helper::Helper;
 use crate::search::score::ScoreElement;
 use crate::solver::LevelContext;
 
@@ -176,10 +175,8 @@ fn get_k_dist_forced_boxes(
     board_in: &Board,
     k_dist_val: i32,
 ) -> Result<KDistForced> {
-    let mut helper = Helper {
-        k_dist_value: k_dist_val,
-        ..Helper::default()
-    };
+    let mut helper = state.take_aux_helper();
+    helper.k_dist_value = k_dist_val;
 
     let mut b = *board_in;
     b.go_to_final_position_with_given_walls();
@@ -187,75 +184,88 @@ fn get_k_dist_forced_boxes(
     let mut zones = [INF; MAX_INNER];
     let start_zones_num = bfs::mark_connectivities(&ctx.level, &b, &mut zones);
 
-    let mut positions = PositionSet::new(K_DIST_MAX_POSITIONS);
-    for i in 0..start_zones_num {
-        let mut c = b;
-        put_sokoban_in_zone(ctx, &mut c, &zones, i as u32);
-        positions.set_first_position(ctx, &c, true, SearchMode::KDistSearch, &mut helper, state)?;
-    }
-    for i in 0..positions.len() {
-        positions.direct_other_sons_to_position(i);
-    }
-
-    let mut removed_all = false;
-    while positions.len() < K_DIST_MAX_POSITIONS {
-        let Some((pos, son)) = get_k_dist_pos_and_son(&positions) else {
-            break;
-        };
-        positions.expand_position(ctx, pos, son, true, &mut helper, state)?;
-        let last = positions.len() - 1;
-        if positions.positions[last].position_score.boxes_in_level == 0 {
-            removed_all = true;
-            break;
+    let mut positions = state.take_position_set(K_DIST_MAX_POSITIONS);
+    let outcome = (|| -> Result<KDistForced> {
+        for i in 0..start_zones_num {
+            let mut c = b;
+            put_sokoban_in_zone(ctx, &mut c, &zones, i as u32);
+            positions.set_first_position(
+                ctx,
+                &c,
+                true,
+                SearchMode::KDistSearch,
+                &mut helper,
+                state,
+            )?;
         }
-    }
+        for i in 0..positions.len() {
+            positions.direct_other_sons_to_position(i);
+        }
 
-    let mut forced = Board::new(board_in.width(), board_in.height()).expect("same dims");
-    let mut adj_4 = forced;
-    let mut adj_9 = forced;
-    let terminated = positions.len() >= K_DIST_MAX_POSITIONS;
+        let mut removed_all = false;
+        while positions.len() < K_DIST_MAX_POSITIONS {
+            let Some((pos, son)) = get_k_dist_pos_and_son(&positions) else {
+                break;
+            };
+            positions.expand_position(ctx, pos, son, true, &mut helper, state)?;
+            let last = positions.len() - 1;
+            if positions.positions[last].position_score.boxes_in_level == 0 {
+                removed_all = true;
+                break;
+            }
+        }
 
-    if terminated || removed_all {
-        return Ok(KDistForced {
+        let mut forced = Board::new(board_in.width(), board_in.height()).expect("same dims");
+        let mut adj_4 = forced;
+        let mut adj_9 = forced;
+        let terminated = positions.len() >= K_DIST_MAX_POSITIONS;
+
+        if terminated || removed_all {
+            return Ok(KDistForced {
+                terminated,
+                forced,
+                adj_4,
+                adj_9,
+            });
+        }
+
+        for y in 0..forced.height() {
+            for x in 0..forced.width() {
+                forced.set(y, x, 1);
+                adj_4.set(y, x, 10);
+                adj_9.set(y, x, 10);
+            }
+        }
+
+        for pos in 0..positions.len() {
+            let board = positions.positions[pos].board;
+            let (local_4, local_9) = count_adjacent_boxes(&board);
+            for y in 0..board.height() {
+                for x in 0..board.width() {
+                    if board.cell(y, x) & BOX == 0 {
+                        forced.set(y, x, 0);
+                    }
+                    if local_4.cell(y, x) < adj_4.cell(y, x) {
+                        adj_4.set(y, x, local_4.cell(y, x));
+                    }
+                    if local_9.cell(y, x) < adj_9.cell(y, x) {
+                        adj_9.set(y, x, local_9.cell(y, x));
+                    }
+                }
+            }
+        }
+
+        Ok(KDistForced {
             terminated,
             forced,
             adj_4,
             adj_9,
-        });
-    }
+        })
+    })();
 
-    for y in 0..forced.height() {
-        for x in 0..forced.width() {
-            forced.set(y, x, 1);
-            adj_4.set(y, x, 10);
-            adj_9.set(y, x, 10);
-        }
-    }
-
-    for pos in 0..positions.len() {
-        let board = positions.positions[pos].board;
-        let (local_4, local_9) = count_adjacent_boxes(&board);
-        for y in 0..board.height() {
-            for x in 0..board.width() {
-                if board.cell(y, x) & BOX == 0 {
-                    forced.set(y, x, 0);
-                }
-                if local_4.cell(y, x) < adj_4.cell(y, x) {
-                    adj_4.set(y, x, local_4.cell(y, x));
-                }
-                if local_9.cell(y, x) < adj_9.cell(y, x) {
-                    adj_9.set(y, x, local_9.cell(y, x));
-                }
-            }
-        }
-    }
-
-    Ok(KDistForced {
-        terminated,
-        forced,
-        adj_4,
-        adj_9,
-    })
+    state.put_position_set(positions);
+    state.put_aux_helper(helper);
+    outcome
 }
 
 fn check_deadlock_using_k_dist_cache(

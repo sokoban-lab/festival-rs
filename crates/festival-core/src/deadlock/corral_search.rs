@@ -14,7 +14,6 @@ use crate::deadlock::zone::{
 use crate::deadlock::{IS_DEADLOCK, NOT_DEADLOCK, SEARCH_EXCEEDED};
 use crate::error::Result;
 use crate::moves::{Move, apply_move};
-use crate::search::helper::Helper;
 use crate::search::score::ScoreElement;
 use crate::solver::LevelContext;
 
@@ -144,17 +143,18 @@ fn son_can_break_free(
 
 fn mark_deadlocked_sons_using_cache(
     ctx: &LevelContext,
-    state: &mut DeadlockState,
+    state: &DeadlockState,
     positions: &mut PositionSet,
 ) {
     let node = positions.len() - 1;
-    let (pull_mode, hashes, places) = {
-        let p = &positions.positions[node];
-        (p.pull_mode, p.hashes.clone(), p.place_in_positions.clone())
-    };
-    for (i, hash) in hashes.iter().enumerate() {
-        if state.cache_peek(*hash, pull_mode, SearchMode::DeadlockSearch) == Some(IS_DEADLOCK)
-            && places[i].is_none()
+    let count = positions.positions[node].hashes.len();
+    for i in 0..count {
+        let (pull_mode, hash, unexpanded) = {
+            let p = &positions.positions[node];
+            (p.pull_mode, p.hashes[i], p.place_in_positions[i].is_none())
+        };
+        if unexpanded
+            && state.cache_peek(hash, pull_mode, SearchMode::DeadlockSearch) == Some(IS_DEADLOCK)
         {
             positions.set_leaf_as_deadlock(ctx, node, i);
         }
@@ -199,47 +199,53 @@ pub fn corral_deadlock_search_actual(
     pull_mode: bool,
     search_size: usize,
 ) -> Result<i8> {
-    let mut helper = Helper::default();
-
     if !pull_mode && !work_left_in_deadlock_zone(board) {
         return Ok(NOT_DEADLOCK);
     }
 
-    let mut positions = PositionSet::new(search_size);
-    positions.set_first_position(
-        ctx,
-        board,
-        pull_mode,
-        SearchMode::DeadlockSearch,
-        &mut helper,
-        state,
-    )?;
+    let mut helper = state.take_aux_helper();
+    let mut positions = state.take_position_set(search_size);
 
-    let result = loop {
-        if positions.estimate_uniqe_moves() > search_size {
-            break SEARCH_EXCEEDED;
-        }
+    let outcome = (|| -> Result<i8> {
+        positions.set_first_position(
+            ctx,
+            board,
+            pull_mode,
+            SearchMode::DeadlockSearch,
+            &mut helper,
+            state,
+        )?;
 
-        let last = positions.len() - 1;
-        if son_can_break_free(ctx, state, &positions, last) {
-            break NOT_DEADLOCK;
-        }
+        let result = loop {
+            if positions.estimate_uniqe_moves() > search_size {
+                break SEARCH_EXCEEDED;
+            }
 
-        mark_deadlocked_sons_using_cache(ctx, state, &mut positions);
+            let last = positions.len() - 1;
+            if son_can_break_free(ctx, state, &positions, last) {
+                break NOT_DEADLOCK;
+            }
 
-        let Some((node, son)) = choose_deadlock_son(&positions) else {
-            break IS_DEADLOCK;
+            mark_deadlocked_sons_using_cache(ctx, state, &mut positions);
+
+            let Some((node, son)) = choose_deadlock_son(&positions) else {
+                break IS_DEADLOCK;
+            };
+
+            positions.expand_position(ctx, node, son, pull_mode, &mut helper, state)?;
+
+            if positions.len() >= search_size {
+                break SEARCH_EXCEEDED;
+            }
         };
 
-        positions.expand_position(ctx, node, son, pull_mode, &mut helper, state)?;
+        insert_positions_to_deadlock_cache(state, &positions, result);
+        Ok(result)
+    })();
 
-        if positions.len() >= search_size {
-            break SEARCH_EXCEEDED;
-        }
-    };
-
-    insert_positions_to_deadlock_cache(state, &positions, result);
-    Ok(result)
+    state.put_position_set(positions);
+    state.put_aux_helper(helper);
+    outcome
 }
 
 pub fn mini_corral(ctx: &LevelContext, state: &mut DeadlockState, board: &Board) -> Result<i8> {
