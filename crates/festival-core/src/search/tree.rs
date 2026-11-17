@@ -73,6 +73,7 @@ pub struct Tree {
     pub move_hashes: Vec<MoveHashData>,
     pub max_move_hashes: usize,
     pub boards: Vec<u8>,
+    pub max_boards_len: usize,
     pub board_stride: usize,
     pub queues: Vec<IndexedHeap>,
     pub labels_num: usize,
@@ -124,7 +125,8 @@ impl Tree {
             max_expansions,
             move_hashes: try_capacity(max_move_hashes)?,
             max_move_hashes,
-            boards: try_alloc(boards_len, 0)?,
+            boards: try_capacity(boards_len)?,
+            max_boards_len: boards_len,
             board_stride,
             queues: Vec::new(),
             labels_num: 0,
@@ -149,10 +151,8 @@ impl Tree {
     /// Prepares a used tree for another level while keeping its arenas.
     ///
     /// Returns `false` when the tree was built for a different capacity, in
-    /// which case the caller must create a fresh one. The hash table is left
-    /// stale: every search phase calls `Tree::reset`, which refills it before
-    /// the first lookup. The board arena keeps its bytes; each expansion
-    /// writes its own board before anything reads it.
+    /// which case the caller must create a fresh one. Occupied hash slots are
+    /// cleared before dropping `nodes` so `Tree::reset` stays sparse-safe.
     pub fn prepare_for_level(&mut self, log_max_nodes: u32, ctx: &LevelContext) -> Result<bool> {
         if !(4..=30).contains(&log_max_nodes) || self.max_nodes != 1usize << log_max_nodes {
             return Ok(false);
@@ -167,18 +167,18 @@ impl Tree {
             .max_expansions
             .checked_mul(board_stride)
             .ok_or(SolveError::ResourceExhausted)?;
-        if boards_len > self.boards.len() {
+        self.boards.clear();
+        if boards_len > self.boards.capacity() {
             self.boards
-                .try_reserve_exact(boards_len - self.boards.len())
+                .try_reserve_exact(boards_len - self.boards.capacity())
                 .map_err(|_| SolveError::ResourceExhausted)?;
-            self.boards.resize(boards_len, 0);
-        } else {
-            self.boards.truncate(boards_len);
         }
 
+        self.clear_hash_array();
         self.width = width;
         self.height = height;
         self.board_stride = board_stride;
+        self.max_boards_len = boards_len;
         self.nodes.clear();
         self.expansions.clear();
         self.move_hashes.clear();
@@ -192,11 +192,29 @@ impl Tree {
         Ok(true)
     }
 
+    fn clear_hash_array(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        if self.nodes.len().saturating_mul(8) < self.hash_array.len() {
+            for node in &self.nodes {
+                let mut index = (node.hash as usize) & self.mask;
+                while self.hash_array[index] != NONE_NODE {
+                    self.hash_array[index] = NONE_NODE;
+                    index = (index + 1) & self.mask;
+                }
+            }
+        } else {
+            self.hash_array.fill(NONE_NODE);
+        }
+    }
+
     pub fn reset(&mut self) {
-        self.hash_array.fill(NONE_NODE);
+        self.clear_hash_array();
         self.nodes.clear();
         self.expansions.clear();
         self.move_hashes.clear();
+        self.boards.clear();
         for queue in &mut self.queues {
             queue.clear();
         }
@@ -213,7 +231,7 @@ impl Tree {
         if self.move_hashes.len() > self.max_move_hashes.saturating_sub(MAX_MOVES) {
             return true;
         }
-        (self.expansions.len() + 1) * self.board_stride >= self.boards.len()
+        (self.expansions.len() + 1) * self.board_stride >= self.max_boards_len
     }
 
     pub fn find_node_by_hash(&self, hash: u64) -> Option<NodeId> {
@@ -288,15 +306,26 @@ impl Tree {
 
     fn store_board(&mut self, offset: usize, board: &Board) -> Result<()> {
         let end = offset + self.board_stride;
-        if end > self.boards.len() {
+        if end > self.max_boards_len {
             return Err(SolveError::ResourceExhausted);
+        }
+        if offset == self.boards.len() {
+            for y in 0..self.height {
+                let row_start = y * MAX_SIZE;
+                self.boards
+                    .extend_from_slice(&board.cells()[row_start..row_start + self.width]);
+            }
+            return Ok(());
+        }
+        if end > self.boards.len() {
+            self.boards.resize(end, 0);
         }
         let mut pos = offset;
         for y in 0..self.height {
-            for x in 0..self.width {
-                self.boards[pos] = board.cell(y, x);
-                pos += 1;
-            }
+            let row_start = y * MAX_SIZE;
+            self.boards[pos..pos + self.width]
+                .copy_from_slice(&board.cells()[row_start..row_start + self.width]);
+            pos += self.width;
         }
         Ok(())
     }
@@ -1369,5 +1398,29 @@ mod tests {
             try_capacity::<u8>(usize::MAX),
             Err(SolveError::ResourceExhausted)
         ));
+    }
+
+    #[test]
+    fn sparse_and_dense_resets_clear_colliding_probe_chains() {
+        let mut tree = Tree::new(6, 5, 5).unwrap();
+        let mask = tree.mask as u64;
+        // Colliding hashes that also wrap around the end of `hash_array`.
+        for i in 0..7u64 {
+            let hash = (mask - 1) + i * ((mask + 1) * 3);
+            tree.add_node_to_tree(hash, ScoreElement::default())
+                .unwrap();
+        }
+        assert!(tree.nodes.len() * 8 < tree.hash_array.len());
+        tree.reset();
+        assert!(tree.hash_array.iter().all(|&slot| slot == NONE_NODE));
+
+        // Exercise the dense fallback (`nodes.len() * 8 >= hash_array.len()`).
+        for i in 1..=40u64 {
+            tree.add_node_to_tree(i * 17, ScoreElement::default())
+                .unwrap();
+        }
+        assert!(tree.nodes.len() * 8 >= tree.hash_array.len());
+        tree.reset();
+        assert!(tree.hash_array.iter().all(|&slot| slot == NONE_NODE));
     }
 }
