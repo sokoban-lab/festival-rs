@@ -10,108 +10,160 @@ use crate::distance::Distances;
 use crate::graph::Graph;
 use crate::level::Level;
 
+const MAX_WORDS: usize = MAX_INNER.div_ceil(64);
+
 pub struct Hotspots {
+    pub n: usize,
+    pub words: usize,
     pub targets_reachable_from: Vec<u16>,
-    /// `blocks_place[p * MAX_INNER + blocker]`
-    pub blocks_place: Vec<i32>,
-    /// `completely_blocks[p * MAX_INNER + blocker]`
-    pub completely_blocks: Vec<bool>,
+    /// Row `blocker` (`blocker * words .. (blocker + 1) * words`) has bit `p` set
+    /// iff a box at `blocker` reduces the number of targets reachable from `p` (`p != blocker`).
+    pub blocks_any_by_blocker: Vec<u64>,
+    /// Row `p` (`p * words .. (p + 1) * words`) has bit `blocker` set
+    /// iff a box at `blocker` leaves `0` targets reachable from `p`.
+    pub completely_blocks: Vec<u64>,
+    pub has_any_blocker: bool,
     pub aborted: bool,
 }
 
 impl Hotspots {
-    fn empty() -> Self {
+    fn with_places(n: usize) -> Self {
+        let words = n.div_ceil(64);
         Self {
-            targets_reachable_from: vec![0; MAX_INNER],
-            blocks_place: vec![0; MAX_INNER * MAX_INNER],
-            completely_blocks: vec![false; MAX_INNER * MAX_INNER],
+            n,
+            words,
+            targets_reachable_from: vec![0; n],
+            blocks_any_by_blocker: vec![0; n * words],
+            completely_blocks: vec![0; n * words],
+            has_any_blocker: false,
             aborted: false,
         }
     }
 
     fn clear(&mut self) {
         self.targets_reachable_from.fill(0);
-        self.blocks_place.fill(0);
-        self.completely_blocks.fill(false);
+        self.blocks_any_by_blocker.fill(0);
+        self.completely_blocks.fill(0);
+        self.has_any_blocker = false;
     }
 
+    #[inline]
     pub fn double_blocking(&self, index1: usize, index2: usize) -> bool {
-        self.completely_blocks[index1 * MAX_INNER + index2]
-            && self.completely_blocks[index2 * MAX_INNER + index1]
+        if index1 >= self.n || index2 >= self.n {
+            return false;
+        }
+        let c12 =
+            (self.completely_blocks[index1 * self.words + (index2 >> 6)] >> (index2 & 63)) & 1 != 0;
+        let c21 =
+            (self.completely_blocks[index2 * self.words + (index1 >> 6)] >> (index1 & 63)) & 1 != 0;
+        c12 && c21
+    }
+
+    fn collect_box_bits(&self, level: &Level, board: &Board, box_bits: &mut [u64; MAX_WORDS]) {
+        let cells = board.cells();
+        for (index, &(y, x)) in level.coords.iter().enumerate() {
+            if cells[y as usize * MAX_SIZE + x as usize] & BOX != 0 {
+                box_bits[index >> 6] |= 1u64 << (index & 63);
+            }
+        }
     }
 
     pub fn find_hotspots(&self, level: &Level, board: &Board, h: &mut Board, weights: &mut Board) {
         h.zero();
         weights.zero();
-        let mut boxes = Vec::with_capacity(level.index_num());
-
-        for y in 0..board.height() {
-            for x in 0..board.width() {
-                if !level.is_inner(y, x) {
-                    continue;
-                }
-                if board.cell(y, x) & BOX != 0 {
-                    if let Some(index) = level.index_at(y, x) {
-                        boxes.push(index);
-                    }
-                }
-            }
+        if !self.has_any_blocker || self.words == 0 {
+            return;
         }
 
-        for &blocker in &boxes {
-            for &blocked in &boxes {
-                if blocked == blocker {
-                    continue;
+        let words = self.words;
+        let mut box_bits = [0u64; MAX_WORDS];
+        self.collect_box_bits(level, board, &mut box_bits);
+
+        for (word_idx, &word) in box_bits.iter().enumerate().take(words) {
+            let mut w = word;
+            while w != 0 {
+                let bit = w.trailing_zeros() as usize;
+                let blocker = word_idx * 64 + bit;
+                w &= w - 1;
+
+                let row = &self.blocks_any_by_blocker[blocker * words..(blocker + 1) * words];
+                let mut blocked_count = 0u32;
+                for k in 0..words {
+                    blocked_count += (row[k] & box_bits[k]).count_ones();
                 }
-                if self.blocks_place[blocked * MAX_INNER + blocker] != 0 {
+                if blocked_count != 0 {
                     let (y, x) = level.coord(blocker);
                     h.set(y, x, 1);
-                    weights.set(y, x, weights.cell(y, x) + 1);
+                    weights.set(y, x, (blocked_count & 0xff) as u8);
                 }
             }
         }
     }
 
     pub fn score(&self, level: &Level, board: &Board) -> usize {
-        let mut h = Board::new(board.width(), board.height()).expect("same dims");
-        let mut weights = Board::new(board.width(), board.height()).expect("same dims");
-        self.find_hotspots(level, board, &mut h, &mut weights);
-        h.cells()
-            .iter()
-            .take(MAX_INNER)
-            .filter(|cell| **cell != 0)
-            .count()
+        if !self.has_any_blocker || self.words == 0 {
+            return 0;
+        }
+
+        let words = self.words;
+        let mut box_bits = [0u64; MAX_WORDS];
+        self.collect_box_bits(level, board, &mut box_bits);
+
+        let mut count = 0usize;
+        for (word_idx, &word) in box_bits.iter().enumerate().take(words) {
+            let mut w = word;
+            while w != 0 {
+                let bit = w.trailing_zeros() as usize;
+                let blocker = word_idx * 64 + bit;
+                w &= w - 1;
+
+                let row = &self.blocks_any_by_blocker[blocker * words..(blocker + 1) * words];
+                for k in 0..words {
+                    if (row[k] & box_bits[k]) != 0 {
+                        count += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        count
     }
 }
 
-fn count_targets_on_mask(level: &Level, board: &Board, mask: &Board) -> u16 {
-    let mut sum = 0;
-    for y in 0..board.height() {
-        for x in 0..board.width() {
-            if !level.is_inner(y, x) {
-                continue;
-            }
-            if mask.cell(y, x) != 0 && board.cell(y, x) & TARGET != 0 {
-                sum += 1;
-            }
+fn count_targets_on_mask(target_flats: &[usize], mask: &Board) -> u16 {
+    let mask_cells = mask.cells();
+    let mut sum = 0u16;
+    for &flat in target_flats {
+        if mask_cells[flat] != 0 {
+            sum += 1;
         }
     }
     sum
 }
 
 pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant>) -> Hotspots {
-    let mut hotspots = Hotspots::empty();
     let n = level.index_num();
+    let mut hotspots = Hotspots::with_places(n);
+    if n == 0 {
+        return hotspots;
+    }
+
+    let words = hotspots.words;
     let board = level.board;
     let empty = board.without_boxes();
     let mut graph = Graph::new(level);
     let mut targets = Board::new(board.width(), board.height()).expect("same dims");
+    let target_flats: Vec<usize> = level
+        .coords
+        .iter()
+        .map(|&(y, x)| y as usize * MAX_SIZE + x as usize)
+        .filter(|&flat| board.cells()[flat] & TARGET != 0)
+        .collect();
 
     graph.build(level, &empty, false);
-    for p in 0..n {
-        let (y, x) = level.coord(p);
-        graph.find_targets_of_place_without_init_graph(level, y, x, &mut targets);
-        hotspots.targets_reachable_from[p] = count_targets_on_mask(level, &board, &targets);
+    for (p, &(y, x)) in level.coords.iter().enumerate() {
+        graph.find_targets_of_place_without_init_graph(level, y as usize, x as usize, &mut targets);
+        hotspots.targets_reachable_from[p] = count_targets_on_mask(&target_flats, &targets);
     }
 
     for blocker in 0..n {
@@ -145,12 +197,13 @@ pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant
             }
 
             graph.find_targets_of_place_without_init_graph(level, y, x, &mut targets);
-            let updated_targets = count_targets_on_mask(level, &board, &targets);
-            let idx = p * MAX_INNER + blocker;
-            hotspots.blocks_place[idx] =
-                hotspots.targets_reachable_from[p] as i32 - updated_targets as i32;
+            let updated_targets = count_targets_on_mask(&target_flats, &targets);
+            if updated_targets != hotspots.targets_reachable_from[p] {
+                hotspots.blocks_any_by_blocker[blocker * words + (p >> 6)] |= 1u64 << (p & 63);
+                hotspots.has_any_blocker = true;
+            }
             if updated_targets == 0 {
-                hotspots.completely_blocks[idx] = true;
+                hotspots.completely_blocks[p * words + (blocker >> 6)] |= 1u64 << (blocker & 63);
             }
         }
     }
@@ -173,7 +226,39 @@ mod tests {
         let level = level("#########\n#@ $ $ .#\n#########\n");
         let distances = distance::compute(&level);
         let hotspots = init(&level, &distances, None);
-        assert!(!hotspots.blocks_place.is_empty());
+        assert!(hotspots.has_any_blocker);
         assert!(!hotspots.aborted);
+        assert_eq!(hotspots.score(&level, &level.board), 1);
+    }
+
+    #[test]
+    fn bitset_score_matches_find_hotspots_board_mask() {
+        let level = level(
+            "##########\n\
+             #@  $    #\n\
+             #  ###   #\n\
+             #  $ $ ..#\n\
+             #   $   .#\n\
+             ##########\n",
+        );
+        let distances = distance::compute(&level);
+        let hotspots = init(&level, &distances, None);
+
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut h = Board::new(level.board.width(), level.board.height()).unwrap();
+        let mut weights = Board::new(level.board.width(), level.board.height()).unwrap();
+
+        for _ in 0..200 {
+            let mut b = level.board.without_boxes();
+            for &(y, x) in &level.coords {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (state >> 61) == 0 {
+                    b.or(y as usize, x as usize, BOX);
+                }
+            }
+            hotspots.find_hotspots(&level, &b, &mut h, &mut weights);
+            let mask_count = h.cells().iter().take(MAX_INNER).filter(|&&c| c != 0).count();
+            assert_eq!(hotspots.score(&level, &b), mask_count);
+        }
     }
 }

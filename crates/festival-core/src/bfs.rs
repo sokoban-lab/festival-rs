@@ -85,28 +85,69 @@ pub fn bfs(board: &Board, dist: &mut [u32], start_y: usize, start_x: usize, igno
     bfs_from_place(board, dist, start_y, start_x, ignore_boxes);
 }
 
-pub fn get_connectivity(level: &Level, board: &Board) -> usize {
-    let mut dist = [INF; MAX_INNER];
-    let mut components = 0;
+fn connectivity_with_buffers(
+    level: &Level,
+    board: &Board,
+    visited: &mut [bool],
+    queue: &mut [u16],
+) -> usize {
+    let height = board.height();
+    let width = board.width();
+    let cells = board.cells();
+    let mut components = 0usize;
 
-    for y in 0..board.height() {
-        for x in 0..board.width() {
-            let idx = flat(y, x);
-            if !level.is_inner(y, x) {
-                continue;
+    for &(y, x) in &level.coords {
+        let (y, x) = (y as usize, x as usize);
+        if y >= height || x >= width {
+            continue;
+        }
+        let start_idx = flat(y, x);
+        if visited[start_idx] || cells[start_idx] & OCCUPIED != 0 {
+            continue;
+        }
+
+        components += 1;
+        visited[start_idx] = true;
+        queue[0] = start_idx as u16;
+        let mut head = 0usize;
+        let mut tail = 1usize;
+
+        while head < tail {
+            let index = queue[head] as usize;
+            head += 1;
+            let cy = index / MAX_SIZE;
+            let cx = index % MAX_SIZE;
+            for dir in 0..4 {
+                let ny = cy.wrapping_add_signed(DELTA_Y[dir]);
+                let nx = cx.wrapping_add_signed(DELTA_X[dir]);
+                if ny >= height || nx >= width {
+                    continue;
+                }
+                let next_idx = flat(ny, nx);
+                if !visited[next_idx] && cells[next_idx] & OCCUPIED == 0 {
+                    visited[next_idx] = true;
+                    queue[tail] = next_idx as u16;
+                    tail += 1;
+                }
             }
-            if dist[idx] != INF {
-                continue;
-            }
-            if board.cell(y, x) & OCCUPIED != 0 {
-                continue;
-            }
-            bfs_from_place(board, &mut dist, y, x, false);
-            components += 1;
         }
     }
 
     components
+}
+
+pub fn get_connectivity(level: &Level, board: &Board) -> usize {
+    const SMALL_ROWS: usize = 20;
+    const SMALL_INNER: usize = 256;
+    if board.height() <= SMALL_ROWS && level.index_num() <= SMALL_INNER {
+        let mut visited = [false; SMALL_ROWS * MAX_SIZE];
+        let mut queue = [0u16; SMALL_INNER];
+        connectivity_with_buffers(level, board, &mut visited, &mut queue)
+    } else {
+        let mut visited = [false; MAX_INNER];
+        let mut queue = [0u16; MAX_INNER];
+        connectivity_with_buffers(level, board, &mut visited, &mut queue)
+    }
 }
 
 pub fn mark_connectivities(level: &Level, board: &Board, dist: &mut [u32]) -> usize {
@@ -273,5 +314,32 @@ mod tests {
     fn connectivity_counts_components() {
         let level = level("#######\n#@ $ .#\n#######\n");
         assert_eq!(get_connectivity(&level, &level.board), 2);
+    }
+
+    #[test]
+    fn connectivity_matches_mark_connectivities() {
+        let level = level(
+            "############\n\
+             #@  $   .  #\n\
+             #  ### ##  #\n\
+             #   $   .  #\n\
+             ############\n",
+        );
+        let mut state = 0xfeed_face_cafe_babeu64;
+        let mut dist = [INF; MAX_INNER];
+        for _ in 0..300 {
+            let mut b = level.board.without_boxes();
+            b.clear_sokoban_inplace();
+            for &(y, x) in &level.coords {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (state >> 61) == 0 {
+                    b.or(y as usize, x as usize, BOX);
+                }
+            }
+            assert_eq!(
+                get_connectivity(&level, &b),
+                mark_connectivities(&level, &b, &mut dist)
+            );
+        }
     }
 }

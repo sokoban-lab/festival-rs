@@ -6,10 +6,17 @@ use crate::constants::*;
 use crate::error::{Result, SolveError};
 use crate::level::Level;
 
+const _: () = assert!(MAX_ROOMS <= 128);
+const PERM_VISITED: u16 = u16::MAX;
+const SMALL_ROWS: usize = 20;
+const SMALL_INNER: usize = 256;
+
 pub struct Rooms {
     pub board: Vec<u32>,
     pub num: usize,
     pub base_graph: [[bool; MAX_ROOMS]; MAX_ROOMS],
+    base_masks: [u128; MAX_ROOMS],
+    base_edges: i32,
 }
 
 impl Rooms {
@@ -139,17 +146,137 @@ impl Rooms {
         graph
     }
 
+    fn current_masks_with_buffers(
+        &self,
+        level: &Level,
+        b: &Board,
+        stamp: &mut [u16],
+        queue: &mut [u16],
+    ) -> [u128; MAX_ROOMS] {
+        let num = self.num;
+        let all_rooms_mask = (1u128 << num) - 1;
+        let mut masks = [0u128; MAX_ROOMS];
+        for (i, slot) in masks.iter_mut().enumerate().take(num) {
+            *slot = all_rooms_mask & !(1u128 << i);
+        }
+
+        let height = b.height();
+        let width = b.width();
+        let cells = b.cells();
+        let rooms_board = &self.board[..MAX_INNER];
+        let mut color_processed_mask = 0u128;
+        let mut bfs_id = 0u16;
+
+        for &(y, x) in &level.coords {
+            let (y, x) = (y as usize, x as usize);
+            if y >= height || x >= width {
+                continue;
+            }
+            let start_flat = y * MAX_SIZE + x;
+            if cells[start_flat] & OCCUPIED != 0 {
+                continue;
+            }
+            if stamp[start_flat] == PERM_VISITED {
+                continue;
+            }
+            let color_u32 = rooms_board[start_flat];
+            if color_u32 == INF {
+                continue;
+            }
+            let color = color_u32 as usize;
+            color_processed_mask |= 1u128 << color;
+
+            bfs_id += 1;
+            let mut seen_mask = 0u128;
+            stamp[start_flat] = PERM_VISITED;
+            queue[0] = start_flat as u16;
+            let mut head = 0usize;
+            let mut tail = 1usize;
+
+            while head < tail {
+                let index = queue[head] as usize;
+                head += 1;
+                let cy = index / MAX_SIZE;
+                let cx = index % MAX_SIZE;
+
+                for dir in 0..4 {
+                    let ny = cy.wrapping_add_signed(DELTA_Y[dir]);
+                    let nx = cx.wrapping_add_signed(DELTA_X[dir]);
+                    if ny >= height || nx >= width {
+                        continue;
+                    }
+                    let next_flat = ny * MAX_SIZE + nx;
+                    let seen_color = rooms_board[next_flat];
+                    if seen_color != INF && seen_color != color_u32 {
+                        let idx = seen_color as usize;
+                        if idx < MAX_ROOMS {
+                            seen_mask |= 1u128 << idx;
+                        }
+                        continue;
+                    }
+
+                    let s = stamp[next_flat];
+                    if s == bfs_id || s == PERM_VISITED {
+                        continue;
+                    }
+                    if cells[next_flat] & OCCUPIED != 0 {
+                        continue;
+                    }
+
+                    stamp[next_flat] = if seen_color == color_u32 {
+                        PERM_VISITED
+                    } else {
+                        bfs_id
+                    };
+                    queue[tail] = next_flat as u16;
+                    tail += 1;
+                }
+            }
+
+            masks[color] &= seen_mask;
+            let mut unseen = (!seen_mask) & all_rooms_mask;
+            let clear_color = !(1u128 << color);
+            while unseen != 0 {
+                let k = unseen.trailing_zeros() as usize;
+                masks[k] &= clear_color;
+                unseen &= unseen - 1;
+            }
+        }
+
+        for (i, slot) in masks.iter_mut().enumerate().take(num) {
+            if (color_processed_mask >> i) & 1 == 0 {
+                *slot = 0;
+            } else {
+                *slot &= color_processed_mask;
+            }
+        }
+
+        masks
+    }
+
+    #[inline]
+    fn current_masks(&self, level: &Level, b: &Board) -> [u128; MAX_ROOMS] {
+        if b.height() <= SMALL_ROWS && level.index_num() <= SMALL_INNER {
+            let mut stamp = [0u16; SMALL_ROWS * MAX_SIZE];
+            let mut queue = [0u16; SMALL_INNER];
+            self.current_masks_with_buffers(level, b, &mut stamp, &mut queue)
+        } else {
+            let mut stamp = [0u16; MAX_INNER];
+            let mut queue = [0u16; MAX_INNER];
+            self.current_masks_with_buffers(level, b, &mut stamp, &mut queue)
+        }
+    }
+
     pub fn score(&self, level: &Level, board: &Board) -> usize {
         if self.num <= 1 {
             return 0;
         }
-        let graph = self.current_graph(level, board);
-        let mut sum = 0i32;
-        for (base_row, graph_row) in self.base_graph.iter().zip(graph.iter()).take(self.num) {
-            for (base, current) in base_row.iter().zip(graph_row.iter()).take(self.num) {
-                sum += *base as i32 - *current as i32;
-            }
+        let cur_masks = self.current_masks(level, board);
+        let mut cur_edges = 0i32;
+        for &mask in cur_masks.iter().take(self.num) {
+            cur_edges += mask.count_ones() as i32;
         }
+        let sum = self.base_edges - cur_edges;
         debug_assert!(sum % 2 == 0, "C++ exits on odd room score");
         (sum / 2).max(0) as usize
     }
@@ -171,9 +298,23 @@ pub fn analyse(level: &Level, board: &Board) -> Result<Rooms> {
         board: rooms_board,
         num,
         base_graph: [[false; MAX_ROOMS]; MAX_ROOMS],
+        base_masks: [0; MAX_ROOMS],
+        base_edges: 0,
     };
 
     rooms.base_graph = rooms.current_graph(level, &c);
+    let mut base_edges = 0i32;
+    for (i, row) in rooms.base_graph.iter().enumerate().take(num) {
+        let mut mask = 0u128;
+        for (j, &connected) in row.iter().enumerate().take(num) {
+            if connected {
+                mask |= 1u128 << j;
+                base_edges += 1;
+            }
+        }
+        rooms.base_masks[i] = mask;
+    }
+    rooms.base_edges = base_edges;
     Ok(rooms)
 }
 
@@ -267,5 +408,47 @@ mod tests {
         let level = level("#######\n#@ $ .#\n#######\n");
         let rooms = analyse(&level, &level.board).unwrap();
         assert_eq!(rooms.num, 0);
+    }
+
+    #[test]
+    fn fast_room_score_matches_reference_current_graph() {
+        let level = level(
+            "###############\n\
+             #    #    #   #\n\
+             # @  $    $ . #\n\
+             ### #### ### ##\n\
+             #    #    #   #\n\
+             #    $    .   #\n\
+             #    #    #   #\n\
+             ###############\n",
+        );
+        let rooms = analyse(&level, &level.board).unwrap();
+        assert!(rooms.num >= 4);
+
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..500 {
+            let mut b = level.board.without_boxes();
+            b.clear_sokoban_inplace();
+            for &(y, x) in &level.coords {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (state >> 61) == 0 {
+                    b.or(y as usize, x as usize, BOX);
+                }
+            }
+            let graph = rooms.current_graph(&level, &b);
+            let mut sum = 0i32;
+            for (base_row, graph_row) in rooms
+                .base_graph
+                .iter()
+                .zip(graph.iter())
+                .take(rooms.num)
+            {
+                for (base, current) in base_row.iter().zip(graph_row.iter()).take(rooms.num) {
+                    sum += *base as i32 - *current as i32;
+                }
+            }
+            let expected = (sum / 2).max(0) as usize;
+            assert_eq!(rooms.score(&level, &b), expected);
+        }
     }
 }
