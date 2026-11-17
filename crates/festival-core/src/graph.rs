@@ -41,28 +41,43 @@ pub struct Graph {
     pub current_impossible: Board,
     pub vertices_num: usize,
     shift_blocks: ShiftBlocks,
+    visited_scratch: Vec<bool>,
+    current_scratch: Vec<u32>,
+    next_scratch: Vec<u32>,
+    blocked_scratch: Board,
 }
 
 impl Graph {
     pub fn new(level: &Level) -> Self {
         let vertices_num = level.index_num() * 4;
+        let width = level.initial.width();
+        let height = level.initial.height();
         Self {
             vertices: vec![Vertex::default(); vertices_num],
-            current_impossible: Board::new(level.initial.width(), level.initial.height())
-                .expect("level dimensions"),
+            current_impossible: Board::new(width, height).expect("level dimensions"),
             vertices_num,
             shift_blocks: ShiftBlocks::default(),
+            visited_scratch: Vec::with_capacity(vertices_num),
+            current_scratch: Vec::with_capacity(vertices_num),
+            next_scratch: Vec::with_capacity(vertices_num),
+            blocked_scratch: Board::new(width, height).expect("level dimensions"),
         }
     }
 
     /// Like `new`, but leaves the vertex array uninitialized; `build` fills it.
     pub fn unbuilt(level: &Level) -> Self {
+        let vertices_num = level.index_num() * 4;
+        let width = level.initial.width();
+        let height = level.initial.height();
         Self {
-            vertices: Vec::with_capacity(level.index_num() * 4),
-            current_impossible: Board::new(level.initial.width(), level.initial.height())
-                .expect("level dimensions"),
+            vertices: Vec::with_capacity(vertices_num),
+            current_impossible: Board::new(width, height).expect("level dimensions"),
             vertices_num: 0,
             shift_blocks: ShiftBlocks::default(),
+            visited_scratch: Vec::with_capacity(vertices_num),
+            current_scratch: Vec::with_capacity(vertices_num),
+            next_scratch: Vec::with_capacity(vertices_num),
+            blocked_scratch: Board::new(width, height).expect("level dimensions"),
         }
     }
 
@@ -223,9 +238,14 @@ impl Graph {
 
     pub fn do_iterations(&mut self, pull_mode: bool) {
         let n = self.vertices_num;
-        let mut visited = vec![false; n];
-        let mut current: Vec<u32> = Vec::with_capacity(n);
-        let mut next: Vec<u32> = Vec::with_capacity(n);
+        self.visited_scratch.clear();
+        self.visited_scratch.resize(n, false);
+        self.current_scratch.clear();
+        self.next_scratch.clear();
+
+        let visited = &mut self.visited_scratch;
+        let current = &mut self.current_scratch;
+        let next = &mut self.next_scratch;
 
         for (i, vertex) in self.vertices.iter_mut().enumerate() {
             if vertex.weight == 0 {
@@ -237,9 +257,9 @@ impl Graph {
 
         while !next.is_empty() {
             current.clear();
-            std::mem::swap(&mut current, &mut next);
+            std::mem::swap(current, next);
 
-            for &v in &current {
+            for &v in current.iter() {
                 let vertex = self.vertices[v as usize];
 
                 for dir in 0..4 {
@@ -497,29 +517,6 @@ impl Graph {
         }
     }
 
-    fn update_shift(&mut self, level: &Level, board: &Board, box_y: usize, box_x: usize) {
-        let Some(box_index) = level.index_at(box_y, box_x) else {
-            return;
-        };
-        let base = box_index * 4;
-        let mut has_sokoban = [false; 4];
-        for (dir, has) in has_sokoban.iter_mut().enumerate() {
-            if board.at_dir(box_y, box_x, dir) & SOKOBAN != 0 {
-                *has = true;
-            }
-        }
-        for (from, has_from) in has_sokoban.iter().enumerate() {
-            if !has_from {
-                continue;
-            }
-            for (to, has_to) in has_sokoban.iter().enumerate() {
-                if *has_to {
-                    self.vertices[base + from].shift[to] = (base + to) as u32;
-                }
-            }
-        }
-    }
-
     pub fn mark_box_moves_in_graph(
         &mut self,
         level: &Level,
@@ -534,8 +531,14 @@ impl Graph {
         let (box_y, box_x) = level.coord(box_index);
         debug_assert!(b.cell(box_y, box_x) & BOX != 0);
 
-        let mut current: Vec<u32> = Vec::with_capacity(MAX_INNER);
-        let mut next: Vec<u32> = Vec::with_capacity(MAX_INNER);
+        b.and_not(box_y, box_x, BOX);
+        self.shift_blocks.compute(level, &b);
+
+        self.current_scratch.clear();
+        self.next_scratch.clear();
+        let current = &mut self.current_scratch;
+        let next = &mut self.next_scratch;
+        let edge_block = &self.shift_blocks.edge_block;
 
         for dir in 0..4 {
             let sy = box_y as isize + DELTA_Y[dir];
@@ -546,14 +549,13 @@ impl Graph {
             }
         }
 
-        b.and_not(box_y, box_x, BOX);
         let mut d = 0u32;
 
         while !current.is_empty() {
             d += 1;
             next.clear();
 
-            for &index in &current {
+            for &index in current.iter() {
                 let direction = (index & 3) as usize;
                 let (box_y, box_x) = level.coord((index / 4) as usize);
 
@@ -601,21 +603,56 @@ impl Graph {
                 next.push(next_index);
                 let index_after_push = next_index;
 
-                b.clear_sokoban_inplace();
-                b.or(next_box_y, next_box_x, BOX);
-                if next_sok_y >= 0 && next_sok_x >= 0 {
-                    b.or(next_sok_y as usize, next_sok_x as usize, SOKOBAN);
+                let mut has_sokoban = [false; 4];
+                if b.cell(next_box_y, next_box_x) & OCCUPIED == 0
+                    && b.get(next_sok_y, next_sok_x) & OCCUPIED == 0
+                    && next_sok_y >= 0
+                    && next_sok_x >= 0
+                    && let Some(sok_idx) =
+                        level.index_at(next_sok_y as usize, next_sok_x as usize)
+                {
+                    let from_block = edge_block[sok_idx * 4 + ((direction + 2) & 3)];
+                    for (dir, slot) in has_sokoban.iter_mut().enumerate() {
+                        if dir == direction {
+                            *slot = b.in_bounds(next_sok_y as usize, next_sok_x as usize);
+                        } else if from_block != 0
+                            && let Some(nbr) = neighbor_index(level, &b, next_box_index, dir)
+                        {
+                            *slot = edge_block[nbr * 4 + ((dir + 2) & 3)] == from_block;
+                        }
+                    }
+                } else {
+                    let mut tmp = b;
+                    tmp.clear_sokoban_inplace();
+                    tmp.or(next_box_y, next_box_x, BOX);
+                    if next_sok_y >= 0 && next_sok_x >= 0 {
+                        tmp.expand_sokoban_cloud_from(
+                            next_sok_y as usize,
+                            next_sok_x as usize,
+                        );
+                    }
+                    for (dir, slot) in has_sokoban.iter_mut().enumerate() {
+                        *slot = tmp.at_dir(next_box_y, next_box_x, dir) & SOKOBAN != 0;
+                    }
                 }
-                b.expand_sokoban_cloud();
-                self.update_shift(level, &b, next_box_y, next_box_x);
 
-                for dir in 0..4 {
-                    let sy = next_box_y as isize + DELTA_Y[dir];
-                    let sx = next_box_x as isize + DELTA_X[dir];
-                    if b.get(sy, sx) & SOKOBAN == 0 {
+                let base = next_box_index * 4;
+                for (from, &has_from) in has_sokoban.iter().enumerate() {
+                    if !has_from {
                         continue;
                     }
-                    let next_index = (next_box_index * 4 + dir) as u32;
+                    for (to, &has_to) in has_sokoban.iter().enumerate() {
+                        if has_to {
+                            self.vertices[base + from].shift[to] = (base + to) as u32;
+                        }
+                    }
+                }
+
+                for (dir, &has_dir) in has_sokoban.iter().enumerate() {
+                    if !has_dir {
+                        continue;
+                    }
+                    let next_index = (base + dir) as u32;
                     if self.vertices[next_index as usize].weight != INF {
                         continue;
                     }
@@ -623,17 +660,10 @@ impl Graph {
                     self.vertices[next_index as usize].src = index_after_push as i32;
                     next.push(next_index);
                 }
-
-                b.and_not(next_box_y, next_box_x, BOX);
             }
 
-            std::mem::swap(&mut current, &mut next);
+            std::mem::swap(current, next);
         }
-    }
-
-    fn can_move_from_index_to_index(&self, from: u32, to: u32) -> bool {
-        debug_assert!((from ^ to) >> 2 == 0);
-        self.vertices[from as usize].shift[(to & 3) as usize] == to
     }
 
     pub fn find_reversible_moves(
@@ -644,9 +674,14 @@ impl Graph {
         pull_mode: bool,
     ) {
         let n = self.vertices_num;
-        let mut visited = vec![false; n];
-        let mut current: Vec<u32> = Vec::with_capacity(MAX_INNER);
-        let mut next: Vec<u32> = Vec::with_capacity(MAX_INNER);
+        self.visited_scratch.clear();
+        self.visited_scratch.resize(n, false);
+        self.current_scratch.clear();
+        self.next_scratch.clear();
+
+        let visited = &mut self.visited_scratch;
+        let current = &mut self.current_scratch;
+        let next = &mut self.next_scratch;
 
         let (box_y, box_x) = level.coord(box_index);
         debug_assert!(board.cell(box_y, box_x) & BOX != 0);
@@ -671,13 +706,13 @@ impl Graph {
 
         while !current.is_empty() {
             next.clear();
-            for &index in &current {
-                for dir in 0..4 {
+            for &index in current.iter() {
+                for dir in 0..4u32 {
                     let next_index = (index & !3) + dir;
                     if visited[next_index as usize] {
                         continue;
                     }
-                    if self.can_move_from_index_to_index(index, next_index)
+                    if self.vertices[index as usize].shift[dir as usize] == next_index
                         && self.vertices[next_index as usize].src != -1
                     {
                         next.push(next_index);
@@ -729,7 +764,7 @@ impl Graph {
                     visited[next_index as usize] = true;
                 }
             }
-            std::mem::swap(&mut current, &mut next);
+            std::mem::swap(current, next);
         }
     }
 
@@ -744,44 +779,27 @@ impl Graph {
         possible_board: &Board,
         impossible_place: &[bool],
     ) {
-        let b = *board_in;
         self.current_impossible.zero();
 
-        for (i, impossible) in impossible_place.iter().enumerate().take(level.index_num()) {
-            let (y, x) = level.coord(i);
-            if *impossible {
-                self.current_impossible.set(y, x, 1);
-            }
-            if b.cell(y, x) == WALL {
-                self.current_impossible.set(y, x, 1);
-            }
-        }
-
         if !pull_mode {
-            let mut without_box = b;
+            let mut without_box = *board_in;
             without_box.and_not(box_y, box_x, BOX);
-            let mut blocked = Board::new(b.width(), b.height()).expect("same dims");
-            mark_deadlock_2x2(&without_box, &mut blocked);
-            for y in 0..b.height() {
-                for x in 0..b.width() {
-                    if !level.is_inner(y, x) {
-                        continue;
-                    }
-                    if blocked.cell(y, x) != 0 {
-                        self.current_impossible.set(y, x, 1);
-                    }
-                }
-            }
+            mark_deadlock_2x2(&without_box, &mut self.blocked_scratch);
         }
 
-        for y in 0..b.height() {
-            for x in 0..b.width() {
-                if !level.is_inner(y, x) {
-                    continue;
-                }
-                if possible_board.cell(y, x) == 0 {
-                    self.current_impossible.set(y, x, 1);
-                }
+        let b_cells = board_in.cells();
+        let possible_cells = possible_board.cells();
+        let blocked_cells = self.blocked_scratch.cells();
+        let out_cells = self.current_impossible.cells_mut();
+
+        for (i, &(y, x)) in level.coords.iter().enumerate() {
+            let flat = y as usize * MAX_SIZE + x as usize;
+            let is_imp = impossible_place.get(i).copied().unwrap_or(false)
+                || b_cells[flat] == WALL
+                || possible_cells[flat] == 0
+                || (!pull_mode && blocked_cells[flat] != 0);
+            if is_imp {
+                out_cells[flat] = 1;
             }
         }
     }
@@ -1078,6 +1096,176 @@ mod tests {
                 board.set(y, x, WALL);
             }
             assert_shifts_match(&level, &board, &format!("round {round}"));
+        }
+    }
+
+    fn reference_mark_box_moves(
+        graph: &mut Graph,
+        level: &Level,
+        board_in: &Board,
+        box_index: usize,
+        pull_mode: bool,
+    ) {
+        let mut b = *board_in;
+        graph.clear_shift();
+        graph.set_weights_infinity();
+        let (box_y, box_x) = level.coord(box_index);
+        let mut current = Vec::new();
+        let mut next = Vec::new();
+        for dir in 0..4 {
+            let sy = box_y as isize + DELTA_Y[dir];
+            let sx = box_x as isize + DELTA_X[dir];
+            if b.get(sy, sx) & SOKOBAN != 0 {
+                graph.vertices[box_index * 4 + dir].weight = 0;
+                current.push((box_index * 4 + dir) as u32);
+            }
+        }
+        b.and_not(box_y, box_x, BOX);
+        let mut d = 0u32;
+        while !current.is_empty() {
+            d += 1;
+            next.clear();
+            for &index in &current {
+                let direction = (index & 3) as usize;
+                let (by, bx) = level.coord((index / 4) as usize);
+                let sok_y = by as isize + DELTA_Y[direction];
+                let sok_x = bx as isize + DELTA_X[direction];
+                let (next_by, next_bx, next_sy, next_sx) = if pull_mode {
+                    let ns_y = sok_y + DELTA_Y[direction];
+                    let ns_x = sok_x + DELTA_X[direction];
+                    if b.get(ns_y, ns_x) & OCCUPIED != 0 {
+                        continue;
+                    }
+                    (sok_y, sok_x, ns_y, ns_x)
+                } else {
+                    let nb_y = by as isize - DELTA_Y[direction];
+                    let nb_x = bx as isize - DELTA_X[direction];
+                    if b.get(nb_y, nb_x) & OCCUPIED != 0 {
+                        continue;
+                    }
+                    (nb_y, nb_x, by as isize, bx as isize)
+                };
+                if next_by < 0 || next_bx < 0 {
+                    continue;
+                }
+                let (next_by, next_bx) = (next_by as usize, next_bx as usize);
+                if !b.in_bounds(next_by, next_bx) || graph.current_impossible.cell(next_by, next_bx) != 0 {
+                    continue;
+                }
+                let Some(next_box_idx) = level.index_at(next_by, next_bx) else {
+                    continue;
+                };
+                let next_index = (next_box_idx * 4 + direction) as u32;
+                if graph.vertices[next_index as usize].weight != INF {
+                    continue;
+                }
+                graph.vertices[next_index as usize].weight = d;
+                graph.vertices[next_index as usize].src = index as i32;
+                next.push(next_index);
+                let after = next_index;
+
+                b.clear_sokoban_inplace();
+                b.or(next_by, next_bx, BOX);
+                if next_sy >= 0 && next_sx >= 0 {
+                    b.or(next_sy as usize, next_sx as usize, SOKOBAN);
+                }
+                b.expand_sokoban_cloud();
+                let base = next_box_idx * 4;
+                for from in 0..4 {
+                    if b.at_dir(next_by, next_bx, from) & SOKOBAN == 0 {
+                        continue;
+                    }
+                    for to in 0..4 {
+                        if b.at_dir(next_by, next_bx, to) & SOKOBAN != 0 {
+                            graph.vertices[base + from].shift[to] = (base + to) as u32;
+                        }
+                    }
+                }
+                for dir in 0..4 {
+                    if b.at_dir(next_by, next_bx, dir) & SOKOBAN == 0 {
+                        continue;
+                    }
+                    let ni = (base + dir) as u32;
+                    if graph.vertices[ni as usize].weight != INF {
+                        continue;
+                    }
+                    graph.vertices[ni as usize].weight = d;
+                    graph.vertices[ni as usize].src = after as i32;
+                    next.push(ni);
+                }
+                b.and_not(next_by, next_bx, BOX);
+            }
+            std::mem::swap(&mut current, &mut next);
+        }
+    }
+
+    #[test]
+    fn mark_box_moves_matches_floodfill_reference() {
+        let level = level(
+            "#############\n\
+             #@    #     #\n\
+             #  ##   ##  #\n\
+             #     $     #\n\
+             #  #  .  #  #\n\
+             #     $     #\n\
+             #  ##   ##  #\n\
+             #     .     #\n\
+             #############\n",
+        );
+        let mut g_fast = Graph::new(&level);
+        let mut g_ref = Graph::new(&level);
+        let mut possible = Board::new(level.board.width(), level.board.height()).unwrap();
+        for &(y, x) in &level.coords {
+            possible.set(y as usize, x as usize, 1);
+        }
+        let imp = vec![false; level.index_num()];
+
+        let mut rng = 0xa5a5_5a5a_1234_5678u64;
+        for _ in 0..200 {
+            let mut b = level.board.without_boxes();
+            b.clear_sokoban_inplace();
+            let mut box_indices = Vec::new();
+            for (idx, &(y, x)) in level.coords.iter().enumerate() {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+                if (rng >> 61) == 0 {
+                    b.or(y as usize, x as usize, BOX);
+                    box_indices.push(idx);
+                }
+            }
+            if box_indices.is_empty() {
+                continue;
+            }
+            // Pick a free cell for sokoban and expand cloud
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let start = (rng as usize) % level.index_num();
+            let (sy, sx) = level.coord(start);
+            if b.cell(sy, sx) & OCCUPIED != 0 {
+                continue;
+            }
+            b.expand_sokoban_cloud_from(sy, sx);
+
+            let chosen = box_indices[(rng as usize >> 8) % box_indices.len()];
+            let (by, bx) = level.coord(chosen);
+
+            for pull_mode in [false, true] {
+                g_fast.set_current_impossible(&level, &b, by, bx, pull_mode, &possible, &imp);
+                g_ref.current_impossible = g_fast.current_impossible;
+
+                g_fast.mark_box_moves_in_graph(&level, &b, chosen, pull_mode);
+                reference_mark_box_moves(&mut g_ref, &level, &b, chosen, pull_mode);
+
+                g_fast.find_reversible_moves(&level, &b, chosen, pull_mode);
+                g_ref.find_reversible_moves(&level, &b, chosen, pull_mode);
+
+                for v in 0..g_fast.vertices_num {
+                    let vf = g_fast.vertices[v];
+                    let vr = g_ref.vertices[v];
+                    assert_eq!(vf.weight, vr.weight, "weight mismatch v={v} pull={pull_mode}");
+                    assert_eq!(vf.src, vr.src, "src mismatch v={v} pull={pull_mode}");
+                    assert_eq!(vf.shift, vr.shift, "shift mismatch v={v} pull={pull_mode}");
+                    assert_eq!(vf.reversible, vr.reversible, "rev mismatch v={v} pull={pull_mode}");
+                }
+            }
         }
     }
 }

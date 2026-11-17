@@ -141,19 +141,20 @@ pub fn find_possible_moves(
         turn_fixed_boxes_into_walls(level, &ctx.distances, &b, &deadlock.envelopes)
     };
 
-    let mut possible = Board::new(board.width(), board.height())?;
-    for y in 0..board.height() {
-        for x in 0..board.width() {
-            if level.is_inner(y, x) {
+    let possible = if !pull_mode {
+        bfs::get_srcs_of_all_targets(level, &board)
+    } else if search_mode == SearchMode::BaseSearch {
+        crate::planning::heuristics::compute_possible_from_bases(ctx, &board)?
+    } else {
+        let mut possible = Board::new(board.width(), board.height())?;
+        for &(y, x) in &level.coords {
+            let (y, x) = (y as usize, x as usize);
+            if y < board.height() && x < board.width() {
                 possible.set(y, x, 1);
             }
         }
-    }
-    if !pull_mode {
-        possible = bfs::get_srcs_of_all_targets(level, &board);
-    } else if search_mode == SearchMode::BaseSearch {
-        possible = crate::planning::heuristics::compute_possible_from_bases(ctx, &board)?;
-    }
+        possible
+    };
 
     let mut use_corral = !matches!(
         search_mode,
@@ -190,6 +191,7 @@ pub fn find_possible_moves(
         _ => Graph::new(level),
     };
     let mut moves: Vec<Move> = Vec::new();
+    let mut box_moves: Vec<Move> = Vec::new();
 
     let result = (|| -> Result<(Vec<Move>, bool)> {
         for index in 0..level.index_num() {
@@ -252,7 +254,8 @@ pub fn find_possible_moves(
             }
             count = kept;
 
-            let mut box_moves: Vec<Move> = scratch[..count].to_vec();
+            box_moves.clear();
+            box_moves.extend_from_slice(&scratch[..count]);
             count = detect_kill_moves(
                 ctx,
                 deadlock,
@@ -331,10 +334,8 @@ pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: 
     let sok_y = to_y as isize + DELTA_Y[dir];
     let sok_x = to_x as isize + DELTA_X[dir];
     if sok_y >= 0 && sok_x >= 0 {
-        board.or(sok_y as usize, sok_x as usize, SOKOBAN);
+        board.expand_sokoban_cloud_from(sok_y as usize, sok_x as usize);
     }
-
-    board.expand_sokoban_cloud();
 
     if search_mode == SearchMode::DeadlockSearch {
         update_deadlock_zone(level, board, mv.pull);

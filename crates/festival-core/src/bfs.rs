@@ -186,41 +186,35 @@ pub fn get_connectivity_sizes(dist: &[u32], n: usize, sizes: &mut [usize]) {
 
 /// Marks positions from which a box can be pulled to any target.
 pub fn get_srcs_of_all_targets(level: &Level, board: &Board) -> Board {
-    let mut srcs = Board::new(board.width(), board.height()).expect("same dims");
+    let height = board.height();
+    let width = board.width();
+    let mut srcs = Board::new(width, height).expect("same dims");
     let b = board.without_boxes();
-    let mut queue: Vec<usize> = Vec::with_capacity(MAX_INNER);
+    let b_cells = b.cells();
+    let mut queue = [0u16; MAX_INNER];
+    let mut tail = 0usize;
 
-    for y in 0..b.height() {
-        for x in 0..b.width() {
-            if !level.is_inner(y, x) {
-                continue;
-            }
-            if b.cell(y, x) & TARGET == 0 {
-                continue;
-            }
-            if let Some(index) = level.index_at(y, x) {
-                queue.push(index);
-                srcs.set(y, x, 1);
-            }
+    for (index, &(y, x)) in level.coords.iter().enumerate() {
+        let (y, x) = (y as usize, x as usize);
+        if y < height && x < width && b_cells[y * MAX_SIZE + x] & TARGET != 0 {
+            queue[tail] = index as u16;
+            tail += 1;
+            srcs.set(y, x, 1);
         }
     }
 
-    let mut pos = 0;
-    while pos < queue.len() {
-        let (y, x) = level.coord(queue[pos]);
+    let mut pos = 0usize;
+    while pos < tail {
+        let (y, x) = level.coord(queue[pos] as usize);
         pos += 1;
 
         for dir in 0..4 {
-            let box_y = y as isize + DELTA_Y[dir];
-            let box_x = x as isize + DELTA_X[dir];
-            if box_y < 0 || box_x < 0 {
+            let box_y = y.wrapping_add_signed(DELTA_Y[dir]);
+            let box_x = x.wrapping_add_signed(DELTA_X[dir]);
+            if box_y >= height || box_x >= width {
                 continue;
             }
-            let (box_y, box_x) = (box_y as usize, box_x as usize);
-            if !b.in_bounds(box_y, box_x) {
-                continue;
-            }
-            if b.cell(box_y, box_x) & OCCUPIED != 0 {
+            if b_cells[box_y * MAX_SIZE + box_x] & OCCUPIED != 0 {
                 continue;
             }
             let player_y = box_y as isize + DELTA_Y[dir];
@@ -235,7 +229,8 @@ pub fn get_srcs_of_all_targets(level: &Level, board: &Board) -> Board {
                 continue;
             };
             srcs.set(box_y, box_x, 1);
-            queue.push(index);
+            queue[tail] = index as u16;
+            tail += 1;
         }
     }
 

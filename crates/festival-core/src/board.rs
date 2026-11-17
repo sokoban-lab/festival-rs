@@ -137,7 +137,7 @@ impl Board {
     }
 
     pub fn zero(&mut self) {
-        self.cells = [0; MAX_INNER];
+        self.cells[..self.height * MAX_SIZE].fill(0);
     }
 
     pub fn copy_board(&self) -> Self {
@@ -301,36 +301,73 @@ impl Board {
         sum
     }
 
-    pub fn expand_sokoban_cloud(&mut self) {
-        let mut queue: Vec<(usize, usize)> = Vec::with_capacity(self.width * self.height);
+    fn expand_sokoban_queue(&mut self, queue: &mut [u16], mut tail: usize) {
+        let height = self.height;
+        let width = self.width;
+        let mut head = 0usize;
+        while head < tail {
+            let packed = queue[head];
+            head += 1;
+            let y = (packed >> 8) as usize;
+            let x = (packed & 0xff) as usize;
+            for dir in 0..4 {
+                let ny = y.wrapping_add_signed(DELTA_Y[dir]);
+                let nx = x.wrapping_add_signed(DELTA_X[dir]);
+                if ny >= height || nx >= width {
+                    continue;
+                }
+                let next_idx = ny * MAX_SIZE + nx;
+                let cell = self.cells[next_idx];
+                if cell & (SOKOBAN | OCCUPIED) != 0 {
+                    continue;
+                }
+                self.cells[next_idx] = cell | SOKOBAN;
+                queue[tail] = ((ny as u16) << 8) | (nx as u16);
+                tail += 1;
+            }
+        }
+    }
+
+    fn expand_sokoban_with_buffer(&mut self, queue: &mut [u16]) {
+        let mut tail = 0usize;
         for y in 0..self.height {
+            let row = y * MAX_SIZE;
             for x in 0..self.width {
-                if self.cell(y, x) & SOKOBAN != 0 {
-                    queue.push((y, x));
+                if self.cells[row + x] & SOKOBAN != 0 {
+                    queue[tail] = ((y as u16) << 8) | (x as u16);
+                    tail += 1;
                 }
             }
         }
-        let mut pos = 0;
-        while pos < queue.len() {
-            let (y, x) = queue[pos];
-            pos += 1;
-            for dir in 0..4 {
-                let ny = y as isize + DELTA_Y[dir];
-                let nx = x as isize + DELTA_X[dir];
-                if ny < 0 || nx < 0 {
-                    continue;
-                }
-                let (ny, nx) = (ny as usize, nx as usize);
-                if !self.in_bounds(ny, nx) {
-                    continue;
-                }
-                let cell = self.cell(ny, nx);
-                if cell & SOKOBAN != 0 || cell & OCCUPIED != 0 {
-                    continue;
-                }
-                self.cells[ny * MAX_SIZE + nx] |= SOKOBAN;
-                queue.push((ny, nx));
-            }
+        self.expand_sokoban_queue(queue, tail);
+    }
+
+    pub fn expand_sokoban_cloud(&mut self) {
+        if self.width * self.height <= 512 {
+            let mut queue = [0u16; 512];
+            self.expand_sokoban_with_buffer(&mut queue);
+        } else {
+            let mut queue = [0u16; MAX_INNER];
+            self.expand_sokoban_with_buffer(&mut queue);
+        }
+    }
+
+    /// Flood-fills `SOKOBAN` from a single known player cell when the board has
+    /// just had all other `SOKOBAN` bits cleared (e.g. `apply_move`).
+    pub fn expand_sokoban_cloud_from(&mut self, start_y: usize, start_x: usize) {
+        if !self.in_bounds(start_y, start_x) {
+            return;
+        }
+        self.cells[start_y * MAX_SIZE + start_x] |= SOKOBAN;
+        let seed = ((start_y as u16) << 8) | (start_x as u16);
+        if self.width * self.height <= 512 {
+            let mut queue = [0u16; 512];
+            queue[0] = seed;
+            self.expand_sokoban_queue(&mut queue, 1);
+        } else {
+            let mut queue = [0u16; MAX_INNER];
+            queue[0] = seed;
+            self.expand_sokoban_queue(&mut queue, 1);
         }
     }
 
