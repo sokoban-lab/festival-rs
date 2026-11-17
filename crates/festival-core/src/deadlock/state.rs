@@ -4,6 +4,8 @@
 //! patterns and MPDB2 tables in process globals. Here they are explicit,
 //! per-level state owned by the search thread.
 
+use std::sync::Arc;
+
 use crate::analysis::EnvelopePatterns;
 use crate::analysis::hungarian::HungarianCache;
 use crate::board::Board;
@@ -11,7 +13,6 @@ use crate::deadlock::cache::DeadlockCache;
 use crate::deadlock::k_dist::KDistHash;
 use crate::deadlock::mpdb::Mpdb;
 use crate::deadlock::positions::PositionSet;
-use crate::deadlock::rooms::init_rooms_deadlock;
 use crate::deadlock::stuck::StuckPatterns;
 use crate::graph::Graph;
 use crate::search::helper::Helper;
@@ -29,11 +30,11 @@ pub struct RoomsDeadlockData {
 pub struct DeadlockState {
     pub cache: DeadlockCache,
     pub hungarian_cache: HungarianCache,
-    pub mpdb: Mpdb,
+    pub mpdb: Arc<Mpdb>,
     pub k_dist: KDistHash,
     pub stuck: StuckPatterns,
-    pub rooms: RoomsDeadlockData,
-    pub envelopes: EnvelopePatterns,
+    pub rooms: Arc<RoomsDeadlockData>,
+    pub envelopes: Arc<EnvelopePatterns>,
     pub(crate) matching_graph: Option<Graph>,
     helper_pool: Vec<Helper>,
     position_set_pool: Vec<PositionSet>,
@@ -57,14 +58,14 @@ impl DeadlockState {
         Self {
             cache: DeadlockCache::new(cache_log_size),
             hungarian_cache: HungarianCache::new(),
-            mpdb: Mpdb::default(),
+            mpdb: Arc::new(Mpdb::default()),
             k_dist: KDistHash::new(crate::constants::MAX_SIZE, crate::constants::MAX_SIZE),
             stuck: StuckPatterns::default(),
-            rooms: RoomsDeadlockData {
+            rooms: Arc::new(RoomsDeadlockData {
                 room_with_corridors: Vec::new(),
                 room_size: Vec::new(),
-            },
-            envelopes: EnvelopePatterns::new(),
+            }),
+            envelopes: Arc::new(EnvelopePatterns::new()),
             matching_graph: None,
             helper_pool: Vec::new(),
             position_set_pool: Vec::new(),
@@ -199,10 +200,7 @@ impl DeadlockState {
         self.learn_mini_corral = false;
         self.cache_enabled = true;
         self.suppress_cache_writes = false;
-        self.rooms = init_rooms_deadlock(ctx);
-        crate::deadlock::mpdb::build_mpdb2(ctx, self)?;
-        crate::deadlock::mpdb::build_pull_mpdb2(ctx, self)?;
-        crate::analysis::envelope::init_envelope_patterns(ctx, self)?;
+        ctx.populate_shared_deadlock_tables(self)?;
         Ok(())
     }
 
@@ -211,7 +209,7 @@ impl DeadlockState {
         self.hungarian_cache = HungarianCache::new();
         self.k_dist.clear();
         self.stuck.clear();
-        self.envelopes.clear();
+        self.envelopes = Arc::new(EnvelopePatterns::new());
         self.matching_graph = None;
     }
 }

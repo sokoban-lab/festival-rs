@@ -10,7 +10,7 @@ use crate::solver::LevelContext;
 
 const MAX_MPDB_PATTERNS: usize = 50;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Mpdb {
     push: Vec<(usize, usize)>,
     pull: Vec<(usize, usize)>,
@@ -94,11 +94,12 @@ fn very_pullable(board: &Board, y: usize, x: usize) -> bool {
 
 pub fn build_mpdb2(ctx: &LevelContext, state: &mut DeadlockState) -> Result<()> {
     let level = &ctx.level;
-    state.mpdb = Mpdb::default();
+    state.mpdb = std::sync::Arc::new(Mpdb::default());
     if level.box_count == 1 {
         return Ok(());
     }
 
+    let mut push_pairs = Vec::new();
     let mut empty = level.initial;
     empty.clear_boxes_inplace();
     empty.clear_sokoban_inplace();
@@ -145,21 +146,23 @@ pub fn build_mpdb2(ctx: &LevelContext, state: &mut DeadlockState) -> Result<()> 
                 continue;
             }
 
-            if state.mpdb.push.len() < MAX_MPDB_PATTERNS {
-                state.mpdb.push.push((i, j));
+            if push_pairs.len() < MAX_MPDB_PATTERNS {
+                push_pairs.push((i, j));
             }
         }
     }
+    std::sync::Arc::make_mut(&mut state.mpdb).push = push_pairs;
     Ok(())
 }
 
 pub fn build_pull_mpdb2(ctx: &LevelContext, state: &mut DeadlockState) -> Result<()> {
     let level = &ctx.level;
-    state.mpdb.pull = Vec::new();
+    std::sync::Arc::make_mut(&mut state.mpdb).pull.clear();
     if level.box_count == 1 {
         return Ok(());
     }
 
+    let mut pull_pairs = Vec::new();
     let mut empty = level.initial;
     empty.clear_boxes_inplace();
     empty.clear_sokoban_inplace();
@@ -209,11 +212,12 @@ pub fn build_pull_mpdb2(ctx: &LevelContext, state: &mut DeadlockState) -> Result
                 continue;
             }
 
-            if state.mpdb.pull.len() < MAX_MPDB_PATTERNS {
-                state.mpdb.pull.push((i, j));
+            if pull_pairs.len() < MAX_MPDB_PATTERNS {
+                pull_pairs.push((i, j));
             }
         }
     }
 
+    std::sync::Arc::make_mut(&mut state.mpdb).pull = pull_pairs;
     Ok(())
 }

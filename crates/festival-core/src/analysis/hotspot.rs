@@ -130,15 +130,33 @@ impl Hotspots {
     }
 }
 
-fn count_targets_on_mask(target_flats: &[usize], mask: &Board) -> u16 {
-    let mask_cells = mask.cells();
-    let mut sum = 0u16;
-    for &flat in target_flats {
-        if mask_cells[flat] != 0 {
-            sum += 1;
+fn accumulate_pull_reachability(
+    level: &Level,
+    graph: &mut Graph,
+    target_indices: &[usize],
+    counts: &mut [u16],
+) {
+    counts.fill(0);
+    let n = level.index_num();
+    for &t in target_indices {
+        counts[t] += 1;
+        graph.set_weights_infinity();
+        graph.clear_weight_around_cell(t);
+        graph.do_iterations(true);
+        for (p, slot) in counts.iter_mut().enumerate().take(n) {
+            if p == t {
+                continue;
+            }
+            let base = p * 4;
+            if graph.vertices[base].weight != INF
+                || graph.vertices[base + 1].weight != INF
+                || graph.vertices[base + 2].weight != INF
+                || graph.vertices[base + 3].weight != INF
+            {
+                *slot += 1;
+            }
         }
     }
-    sum
 }
 
 pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant>) -> Hotspots {
@@ -152,20 +170,27 @@ pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant
     let board = level.board;
     let empty = board.without_boxes();
     let mut graph = Graph::new(level);
-    let mut targets = Board::new(board.width(), board.height()).expect("same dims");
-    let target_flats: Vec<usize> = level
+    let target_indices: Vec<usize> = level
         .coords
         .iter()
-        .map(|&(y, x)| y as usize * MAX_SIZE + x as usize)
-        .filter(|&flat| board.cells()[flat] & TARGET != 0)
+        .enumerate()
+        .filter_map(|(idx, &(y, x))| {
+            (board.cells()[y as usize * MAX_SIZE + x as usize] & TARGET != 0).then_some(idx)
+        })
         .collect();
 
-    graph.build(level, &empty, false);
-    for (p, &(y, x)) in level.coords.iter().enumerate() {
-        graph.find_targets_of_place_without_init_graph(level, y as usize, x as usize, &mut targets);
-        hotspots.targets_reachable_from[p] = count_targets_on_mask(&target_flats, &targets);
-    }
+    // The pull graph on an otherwise-empty board is the exact transpose of the
+    // push graph, so `target_indices.len()` reverse traversals replace `n`
+    // forward traversals per blocker.
+    graph.build(level, &empty, true);
+    accumulate_pull_reachability(
+        level,
+        &mut graph,
+        &target_indices,
+        &mut hotspots.targets_reachable_from,
+    );
 
+    let mut updated_counts = vec![0u16; n];
     for blocker in 0..n {
         if let Some(deadline) = abort_deadline {
             if Instant::now() >= deadline {
@@ -185,7 +210,8 @@ pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant
 
         let mut board_with_blocker = empty;
         board_with_blocker.set(blocker_y, blocker_x, WALL);
-        graph.build(level, &board_with_blocker, false);
+        graph.build(level, &board_with_blocker, true);
+        accumulate_pull_reachability(level, &mut graph, &target_indices, &mut updated_counts);
 
         for p in 0..n {
             if distances.impossible(p) || p == blocker {
@@ -196,8 +222,7 @@ pub fn init(level: &Level, distances: &Distances, abort_deadline: Option<Instant
                 continue;
             }
 
-            graph.find_targets_of_place_without_init_graph(level, y, x, &mut targets);
-            let updated_targets = count_targets_on_mask(&target_flats, &targets);
+            let updated_targets = updated_counts[p];
             if updated_targets != hotspots.targets_reachable_from[p] {
                 hotspots.blocks_any_by_blocker[blocker * words + (p >> 6)] |= 1u64 << (p & 63);
                 hotspots.has_any_blocker = true;
@@ -259,6 +284,84 @@ mod tests {
             hotspots.find_hotspots(&level, &b, &mut h, &mut weights);
             let mask_count = h.cells().iter().take(MAX_INNER).filter(|&&c| c != 0).count();
             assert_eq!(hotspots.score(&level, &b), mask_count);
+        }
+    }
+
+    #[test]
+    fn transpose_init_matches_forward_push_reference() {
+        for text in [
+            "#########\n#@ $ $ .#\n#########\n",
+            "##########\n#@  $    #\n#  ###   #\n#  $ $ ..#\n#   $   .#\n##########\n",
+            "############\n#@  #     .#\n# $ # ###  #\n#   $   $ .#\n#  ###    .#\n############\n",
+        ] {
+            let level = level(text);
+            let distances = distance::compute(&level);
+            let actual = init(&level, &distances, None);
+
+            let n = level.index_num();
+            let words = n.div_ceil(64);
+            let board = level.board;
+            let empty = board.without_boxes();
+            let mut graph = Graph::new(&level);
+            let mut mask = Board::new(board.width(), board.height()).unwrap();
+            let count_targets = |m: &Board| -> u16 {
+                level
+                    .coords
+                    .iter()
+                    .filter(|&&(y, x)| {
+                        m.cell(y as usize, x as usize) != 0
+                            && board.cell(y as usize, x as usize) & TARGET != 0
+                    })
+                    .count() as u16
+            };
+
+            let mut exp_reach = vec![0u16; n];
+            graph.build(&level, &empty, false);
+            for (p, &(y, x)) in level.coords.iter().enumerate() {
+                graph.find_targets_of_place_without_init_graph(
+                    &level,
+                    y as usize,
+                    x as usize,
+                    &mut mask,
+                );
+                exp_reach[p] = count_targets(&mask);
+            }
+
+            let mut exp_blocks = vec![0u64; n * words];
+            let mut exp_comp = vec![0u64; n * words];
+            for blocker in 0..n {
+                if distances.impossible(blocker) {
+                    continue;
+                }
+                let (by, bx) = level.coord(blocker);
+                if board.cell(by, bx) & TARGET != 0 {
+                    continue;
+                }
+                let mut wb = empty;
+                wb.set(by, bx, WALL);
+                graph.build(&level, &wb, false);
+                for p in 0..n {
+                    if distances.impossible(p) || p == blocker {
+                        continue;
+                    }
+                    let (py, px) = level.coord(p);
+                    if board.cell(py, px) & TARGET != 0 {
+                        continue;
+                    }
+                    graph.find_targets_of_place_without_init_graph(&level, py, px, &mut mask);
+                    let upd = count_targets(&mask);
+                    if upd != exp_reach[p] {
+                        exp_blocks[blocker * words + (p >> 6)] |= 1u64 << (p & 63);
+                    }
+                    if upd == 0 {
+                        exp_comp[p * words + (blocker >> 6)] |= 1u64 << (blocker & 63);
+                    }
+                }
+            }
+
+            assert_eq!(actual.targets_reachable_from, exp_reach);
+            assert_eq!(actual.blocks_any_by_blocker, exp_blocks);
+            assert_eq!(actual.completely_blocks, exp_comp);
         }
     }
 }

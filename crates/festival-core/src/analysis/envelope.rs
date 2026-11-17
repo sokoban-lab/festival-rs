@@ -308,7 +308,7 @@ fn analyse_envelope(
                 continue;
             }
 
-            if !state.envelopes.add(board) {
+            if !std::sync::Arc::make_mut(&mut state.envelopes).add(board) {
                 continue;
             }
         }
@@ -318,7 +318,7 @@ fn analyse_envelope(
 
 /// `init_envelope_patterns`: learns the level's unsolvable corral patterns.
 pub fn init_envelope_patterns(ctx: &LevelContext, state: &mut DeadlockState) -> Result<()> {
-    state.envelopes.clear();
+    state.envelopes = std::sync::Arc::new(EnvelopePatterns::new());
 
     let mut board = ctx.level.initial;
     board.enter_reverse_mode(&ctx.level.initial, false);
