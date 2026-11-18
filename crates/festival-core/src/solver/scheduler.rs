@@ -7,7 +7,7 @@
 //! order is stable.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::deadlock::cache::SharedDeadlockCache;
@@ -132,7 +132,7 @@ fn full_phase(remaining: Duration) -> Duration {
 fn strategy_config(
     config: &SchedulerConfig,
     time_limit: Duration,
-    cancel: &Arc<AtomicBool>,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> StrategyConfig {
     StrategyConfig {
         time_limit,
@@ -140,7 +140,7 @@ fn strategy_config(
         log_max_nodes: config.log_max_nodes,
         dragonfly_max_nodes: dragonfly_max_nodes(config),
         save_best: config.save_best,
-        cancel: Some(Arc::clone(cancel)),
+        cancel: cancel.cloned(),
     }
 }
 
@@ -239,6 +239,7 @@ impl Solver {
         } else {
             None
         };
+
         let mut prepared = Vec::with_capacity(config.cores);
         let mut reused = std::mem::take(&mut self.workers).into_iter();
         for index in 0..config.cores {
@@ -319,27 +320,17 @@ impl Solver {
                     }
                     solved
                 }
-                2 => {
+                2 | 4 => {
+                    let worker_results =
+                        run_dynamic_multicore(ctx, config, started, &perimeter, &cancel, workers);
                     let mut solved = false;
-                    for round in 0..4 {
-                        let budget = scaled(remaining(started, config), 1.0 / (4 - round) as f64);
-                        let algs = [round * 2, round * 2 + 1];
-                        solved = run_round_into(&algs, &[0, 1], budget)?;
-                        if solved {
-                            break;
+                    for (slot, result) in worker_results.into_iter().enumerate() {
+                        let (outcome, slot_exp) = result?;
+                        expansions += slot_exp;
+                        if let Some(ref out) = outcome {
+                            solved |= out.solved;
                         }
-                    }
-                    solved
-                }
-                4 => {
-                    let mut solved = false;
-                    for round in 0..2 {
-                        let budget = scaled(remaining(started, config), 1.0 / (2 - round) as f64);
-                        let algs = [round * 4, round * 4 + 1, round * 4 + 2, round * 4 + 3];
-                        solved = run_round_into(&algs, &[0, 1, 2, 3], budget)?;
-                        if solved {
-                            break;
-                        }
+                        outcomes[slot] = outcome;
                     }
                     solved
                 }
@@ -389,7 +380,7 @@ fn run_round(
     workers: &mut [WorkerState],
 ) -> Vec<Result<SolveOutcome>> {
     if algs.len() == 1 {
-        let worker = strategy_config(config, time_limit, cancel);
+        let worker = strategy_config(config, time_limit, None);
         return vec![run_worker(
             ctx,
             algs[0],
@@ -404,11 +395,87 @@ fn run_round(
         let mut handles = Vec::with_capacity(algs.len());
         let mut worker_iter = workers.iter_mut();
         for &alg in algs {
-            let worker = strategy_config(config, time_limit, cancel);
+            let worker = strategy_config(config, time_limit, Some(cancel));
             let state = worker_iter.next().expect("one worker per strategy");
             handles
                 .push(scope.spawn(move || run_worker(ctx, alg, &worker, perimeter, cancel, state)));
         }
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(SolveError::Internal("solver thread panicked".into())))
+            })
+            .collect()
+    })
+}
+
+/// Spawns `config.cores` persistent workers that dynamically claim strategies
+/// `0..8` via an atomic counter without inter-round barrier stalls.
+fn run_dynamic_multicore(
+    ctx: &LevelContext,
+    config: &SchedulerConfig,
+    started: Instant,
+    perimeter: &Perimeter,
+    cancel: &Arc<AtomicBool>,
+    workers: &mut [WorkerState],
+) -> Vec<Result<(Option<SolveOutcome>, u64)>> {
+    let next_alg = AtomicUsize::new(config.cores);
+    let next_alg_ref = &next_alg;
+
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers.len());
+        for (slot, state) in workers.iter_mut().enumerate() {
+            handles.push(scope.spawn(move || -> Result<(Option<SolveOutcome>, u64)> {
+                let mut slot_outcome: Option<SolveOutcome> = None;
+                let mut slot_expansions = 0u64;
+                let mut first_turn = true;
+
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let alg = if first_turn {
+                        first_turn = false;
+                        slot
+                    } else {
+                        next_alg_ref.fetch_add(1, Ordering::Relaxed)
+                    };
+                    if alg >= 8 {
+                        break;
+                    }
+
+                    let rem = remaining(started, config);
+                    let waves_left = (8 - alg).div_ceil(config.cores);
+                    let budget = scaled(rem, 1.0 / waves_left as f64);
+                    if budget.is_zero() && config.max_expansions.is_none() {
+                        continue;
+                    }
+
+                    let worker_cfg = strategy_config(config, budget, Some(cancel));
+                    let outcome = run_worker(ctx, alg, &worker_cfg, perimeter, cancel, state)?;
+                    slot_expansions += outcome.expansions;
+                    let solved = outcome.solved;
+
+                    let keep_prev = config.save_best
+                        && !solved
+                        && outcome.lurd.is_empty()
+                        && slot_outcome
+                            .as_ref()
+                            .is_some_and(|prev| !prev.lurd.is_empty());
+                    if !keep_prev {
+                        slot_outcome = Some(outcome);
+                    }
+                    if solved {
+                        break;
+                    }
+                }
+
+                Ok((slot_outcome, slot_expansions))
+            }));
+        }
+
         handles
             .into_iter()
             .map(|handle| {
@@ -557,5 +624,27 @@ mod tests {
         );
         assert_eq!(scaled(Duration::from_secs(1), 1.0 / 8.0), Duration::ZERO);
         assert_eq!(full_phase(Duration::from_secs(60)), Duration::from_secs(61));
+    }
+
+    #[test]
+    fn dynamic_multicore_terminates_cleanly_on_unsolvable_level() {
+        // Tight expansion cap forces reverse packing to miss parking orders on
+        // strategies 0/2 while exercising dynamic stealing and 8-core fallbacks.
+        let ctx = context("#########\n#@ $   .#\n#  ###  #\n#  $    #\n#      .#\n#########\n");
+        for cores in [2, 4, 8] {
+            let run = solve_level(
+                &ctx,
+                &SchedulerConfig {
+                    cores,
+                    max_expansions: Some(1),
+                    log_max_nodes: 10,
+                    ..SchedulerConfig::default()
+                },
+            )
+            .unwrap();
+            assert!(!run.solved, "cores {cores}");
+            assert_eq!(run.outcomes.len(), cores);
+            assert!(run.failure_reason.is_some());
+        }
     }
 }

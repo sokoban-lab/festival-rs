@@ -315,6 +315,11 @@ pub fn run_fess_into(
     }
 
     helper.level_solved = solved;
+    if solved {
+        if let Some(flag) = &config.cancel {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     let mut moves = Vec::new();
     let mut solved_node = None;

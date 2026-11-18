@@ -226,6 +226,10 @@ pub fn solve_strategy_into(
         total_expansions += run.expansions;
     }
 
+    if crate::search::cancelled(&config.cancel) {
+        return finish_unsolved(ctx, Some("Time limit exceeded"), total_expansions, started);
+    }
+
     if let Some(reason) = setup_plan_features(ctx, helper, backward_type)? {
         return finish_unsolved(ctx, Some(reason), total_expansions, started);
     }
@@ -299,6 +303,17 @@ pub fn solve_strategy_into(
             );
         }
 
+        if crate::search::cancelled(&config.cancel) {
+            return finish(
+                ctx,
+                false,
+                first.moves,
+                first.failure.or(Some(SolveError::TimeLimit)),
+                total_expansions,
+                started,
+            );
+        }
+
         let elapsed = started.elapsed().as_secs();
         let second_budget = Duration::from_secs(total.as_secs().saturating_sub(elapsed));
         let (time_limit, max_expansions) = phase_limit(config, second_budget);
@@ -345,7 +360,7 @@ pub fn solve_strategy_into(
             forward,
         )?;
         total_expansions += packing.expansions;
-        if !helper.perimeter_found {
+        if !helper.perimeter_found || crate::search::cancelled(&config.cancel) {
             return finish_unsolved(
                 ctx,
                 packing

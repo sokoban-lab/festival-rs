@@ -488,6 +488,9 @@ pub fn run_dragonfly(
     let mut dragonfly = Dragonfly::new();
 
     for z in 0..zones_num as u32 {
+        if crate::search::cancelled(&config.cancel) {
+            return Ok(DragonflyRun::default());
+        }
         let mut root = root_board;
         put_sokoban_in_zone(&mut root, &zones, z);
         dragonfly.add_root(ctx, &root, perimeter)?;

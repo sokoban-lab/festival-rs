@@ -141,6 +141,14 @@ pub fn run_packing(
     let mut best_so_far: Option<ExpansionId> = None;
 
     for c in valid_roots {
+        if crate::search::cancelled(&config.cancel) {
+            return Ok(PackingRun {
+                plan_found: false,
+                expansions: 0,
+                elapsed: clock.elapsed(),
+                failure: Some(SolveError::TimeLimit),
+            });
+        }
         if start_zone_is_deadlocked(ctx, &mut tree.deadlock, &c)? {
             continue;
         }
@@ -311,6 +319,15 @@ pub fn run_packing(
         } else {
             perimeter.insert_node(ctx, tree, child, false);
         }
+    }
+
+    if crate::search::cancelled(&config.cancel) {
+        return Ok(PackingRun {
+            plan_found: false,
+            expansions,
+            elapsed: clock.elapsed(),
+            failure: failure.or(Some(SolveError::TimeLimit)),
+        });
     }
 
     if let Some(best) = best_so_far {

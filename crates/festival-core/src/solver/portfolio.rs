@@ -49,6 +49,7 @@ pub fn run(
     if forward != SearchMode::ForwardWithBases
         || ctx.level.box_count > 12
         || ctx.level.index_num() > 80
+        || crate::search::cancelled(&cancel)
     {
         return Ok(None);
     }
@@ -67,6 +68,14 @@ pub fn run(
     let mut probe_expansions = 0u64;
     let mut best: Option<(usize, ScoreElement, i32, Perimeter, Helper)> = None;
     for (index, plan) in plans.iter().enumerate() {
+        if crate::search::cancelled(&cancel) {
+            return Ok(Some(PortfolioRun {
+                solved: false,
+                moves: Vec::new(),
+                failure: Some(SolveError::TimeLimit),
+                expansions: probe_expansions,
+            }));
+        }
         let mut plan_helper = match prepare_plan(ctx, plan, backward) {
             Ok(helper) => helper,
             Err(_) => continue,
@@ -123,6 +132,15 @@ pub fn run(
         if better {
             best = Some((index, score, min_dist, probe_perimeter, plan_helper));
         }
+    }
+
+    if crate::search::cancelled(&cancel) {
+        return Ok(Some(PortfolioRun {
+            solved: false,
+            moves: Vec::new(),
+            failure: Some(SolveError::TimeLimit),
+            expansions: probe_expansions,
+        }));
     }
 
     let mut plan_helper = match best {
