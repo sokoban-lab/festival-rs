@@ -169,6 +169,7 @@ struct Dragonfly {
     possible_scratch: Vec<bool>,
     hashes_scratch: Vec<u64>,
     packed_scratch: Vec<u16>,
+    visited_scratch: Vec<i32>,
     scores_scratch: Vec<ScoreElement>,
 }
 
@@ -181,6 +182,7 @@ impl Dragonfly {
             possible_scratch: Vec::new(),
             hashes_scratch: Vec::new(),
             packed_scratch: Vec::new(),
+            visited_scratch: Vec::new(),
             scores_scratch: Vec::new(),
         }
     }
@@ -403,7 +405,7 @@ impl Dragonfly {
                 .push(child.boxes_on_bases(&ctx.level.initial) as u16);
         }
 
-        let mut visited_scratch = perimeter.mark_dragonfly_visited(&self.hashes_scratch);
+        perimeter.mark_dragonfly_visited_into(&self.hashes_scratch, &mut self.visited_scratch);
 
         let mut base_score = ScoreElement::default();
         self.scores_scratch.clear();
@@ -423,15 +425,15 @@ impl Dragonfly {
         }
 
         for i in 0..moves.len() {
-            if visited_scratch[i] == 1 {
+            if self.visited_scratch[i] == 1 {
                 continue;
             }
             if !self.possible_scratch[i] {
-                visited_scratch[i] = 1;
+                self.visited_scratch[i] = 1;
                 continue;
             }
             if self.scores_scratch[i].dist_to_targets >= INF as i32 {
-                visited_scratch[i] = 1;
+                self.visited_scratch[i] = 1;
                 continue;
             }
 
@@ -446,11 +448,11 @@ impl Dragonfly {
                 packed: self.packed_scratch[i],
             };
 
-            if visited_scratch[i] < 0 {
+            if self.visited_scratch[i] < 0 {
                 if !helper.perimeter_found {
                     helper.perimeter_found = true;
                 }
-                node.dist = visited_scratch[i];
+                node.dist = self.visited_scratch[i];
             }
 
             self.nodes.push(node);
@@ -458,7 +460,7 @@ impl Dragonfly {
             self.queue.insert(&self.nodes, new_index);
         }
 
-        perimeter.update_dragonfly(&self.hashes_scratch, &visited_scratch, e.depth + 1);
+        perimeter.update_dragonfly(&self.hashes_scratch, &self.visited_scratch, e.depth + 1);
         Ok(true)
     }
 }

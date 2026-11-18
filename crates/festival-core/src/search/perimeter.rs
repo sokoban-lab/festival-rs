@@ -1,12 +1,15 @@
 //! Search frontier (`perimeter.cpp`).
 //!
-//! The C++ table is global and shared by all cores behind one mutex. Here the
-//! table lives behind a `Mutex` so a scheduler can hand the same perimeter to
-//! every worker thread; single-core calls take an uncontended lock.
+//! C++ protects the global perimeter table with a single mutex across all
+//! worker threads. Using a single `RwLock<FastMap>` paired with a lock-free
+//! `AtomicUsize` entry counter lets `is_full()` avoid locking altogether and
+//! lets multi-core `for_each_hit` / Dragonfly reads proceed concurrently
+//! without multi-shard lock fan-out overhead.
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::constants::SearchMode;
 use crate::moves::apply_move;
@@ -50,14 +53,14 @@ struct Entry {
 
 #[derive(Debug, Default)]
 struct Table {
-    entries: FastMap<u64, Entry>,
-    total_entries: usize,
+    entries: RwLock<FastMap<u64, Entry>>,
+    total_entries: AtomicUsize,
 }
 
 #[derive(Debug)]
 pub struct Perimeter {
-    base: Option<Arc<Mutex<Table>>>,
-    table: Arc<Mutex<Table>>,
+    base: Option<Arc<Table>>,
+    table: Arc<Table>,
     log_size: u32,
 }
 
@@ -65,41 +68,42 @@ impl Perimeter {
     pub fn new(log_size: u32) -> Self {
         Self {
             base: None,
-            table: Arc::new(Mutex::new(Table::default())),
+            table: Arc::new(Table::default()),
             log_size,
         }
     }
 
     pub fn clear(&self) {
-        let mut table = self.table.lock().expect("perimeter mutex");
-        table.entries.clear();
-        table.total_entries = 0;
+        let mut entries = self.table.entries.write().expect("perimeter write lock");
+        entries.clear();
+        self.table.total_entries.store(0, Ordering::Relaxed);
     }
 
     /// Copies the current entries into an independent perimeter.
     pub fn snapshot(&self) -> Self {
         let mut merged = match &self.base {
-            Some(base) => {
-                let b = base.lock().expect("perimeter base mutex");
-                Table {
-                    entries: b.entries.clone(),
-                    total_entries: b.total_entries,
-                }
-            }
-            None => Table::default(),
+            Some(base) => base
+                .entries
+                .read()
+                .expect("perimeter base read lock")
+                .clone(),
+            None => FastMap::default(),
         };
-        let local = self.table.lock().expect("perimeter mutex");
-        if merged.entries.is_empty() {
-            merged.entries = local.entries.clone();
-            merged.total_entries = local.total_entries;
+        let local = self.table.entries.read().expect("perimeter read lock");
+        if merged.is_empty() {
+            merged = local.clone();
         } else {
-            for (&hash, &entry) in &local.entries {
-                Self::store_in(&mut merged, hash, entry.depth, entry.side, entry.alg);
+            for (&hash, &entry) in local.iter() {
+                Self::upsert_map(&mut merged, hash, entry.depth, entry.side, entry.alg);
             }
         }
+        let len = merged.len();
         Self {
             base: None,
-            table: Arc::new(Mutex::new(merged)),
+            table: Arc::new(Table {
+                entries: RwLock::new(merged),
+                total_entries: AtomicUsize::new(len),
+            }),
             log_size: self.log_size,
         }
     }
@@ -113,36 +117,49 @@ impl Perimeter {
         };
         Self {
             base: Some(root),
-            table: Arc::new(Mutex::new(Table::default())),
+            table: Arc::new(Table::default()),
             log_size: self.log_size,
         }
     }
 
     /// Flushes this overlay's local writes into `target`.
     pub fn commit_to(&self, target: &Self) {
-        let local = self.table.lock().expect("perimeter mutex");
-        if local.entries.is_empty() {
+        let local = self.table.entries.read().expect("perimeter read lock");
+        if local.is_empty() {
             return;
         }
-        let mut dst = target.table.lock().expect("perimeter target mutex");
-        for (&hash, &entry) in &local.entries {
-            Self::store_in(&mut dst, hash, entry.depth, entry.side, entry.alg);
+        let mut dst = target
+            .table
+            .entries
+            .write()
+            .expect("perimeter target write lock");
+        let mut added = 0usize;
+        for (&hash, &entry) in local.iter() {
+            if Self::upsert_map(&mut dst, hash, entry.depth, entry.side, entry.alg) {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            target.table.total_entries.fetch_add(added, Ordering::Relaxed);
         }
     }
 
+    #[inline]
     pub fn total_entries(&self) -> usize {
         let base_count = self
             .base
             .as_ref()
-            .map_or(0, |b| b.lock().expect("perimeter base mutex").total_entries);
-        base_count + self.table.lock().expect("perimeter mutex").total_entries
+            .map_or(0, |b| b.total_entries.load(Ordering::Relaxed));
+        base_count + self.table.total_entries.load(Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn is_full(&self) -> bool {
         let limit = 1usize << (self.log_size - 1);
         self.total_entries() >= limit
     }
 
+    #[inline]
     fn update(entry: &mut Entry, depth: u16, side: u8, alg: u8) {
         // Dragonfly nodes must not be explored twice; only depth may improve.
         if entry.alg == SearchMode::Dragonfly as u8 {
@@ -169,19 +186,22 @@ impl Perimeter {
         entry.alg = alg;
     }
 
-    fn store_in(table: &mut Table, hash: u64, depth: u16, side: u8, alg: u8) {
-        if let Some(entry) = table.entries.get_mut(&hash) {
+    #[inline]
+    fn upsert_map(map: &mut FastMap<u64, Entry>, hash: u64, depth: u16, side: u8, alg: u8) -> bool {
+        if let Some(entry) = map.get_mut(&hash) {
             Self::update(entry, depth, side, alg);
-            return;
+            return false;
         }
-        table.entries.insert(hash, Entry { depth, side, alg });
-        table.total_entries += 1;
+        map.insert(hash, Entry { depth, side, alg });
+        true
     }
 
     #[cfg(test)]
     fn store(&self, hash: u64, depth: u16, side: u8, alg: u8) {
-        let mut table = self.table.lock().expect("perimeter mutex");
-        Self::store_in(&mut table, hash, depth, side, alg);
+        let mut map = self.table.entries.write().expect("perimeter write lock");
+        if Self::upsert_map(&mut map, hash, depth, side, alg) {
+            self.table.total_entries.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Port of `get_hash_without_bases`: BASE_SEARCH perimeter entries ignore
@@ -261,9 +281,15 @@ impl Perimeter {
                     len += 1;
                 }
             }
-            let mut table = self.table.lock().expect("perimeter mutex");
+            let mut map = self.table.entries.write().expect("perimeter write lock");
+            let mut added = 0usize;
             for &(hash, depth) in &stack_entries[..len] {
-                Self::store_in(&mut table, hash, depth, side, alg);
+                if Self::upsert_map(&mut map, hash, depth, side, alg) {
+                    added += 1;
+                }
+            }
+            if added > 0 {
+                self.table.total_entries.fetch_add(added, Ordering::Relaxed);
             }
             return len;
         }
@@ -282,20 +308,27 @@ impl Perimeter {
             }
         }
 
-        let mut table = self.table.lock().expect("perimeter mutex");
+        let mut map = self.table.entries.write().expect("perimeter write lock");
+        let mut added = 0usize;
         for &(hash, depth) in &entries {
-            Self::store_in(&mut table, hash, depth, side, alg);
+            if Self::upsert_map(&mut map, hash, depth, side, alg) {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            self.table.total_entries.fetch_add(added, Ordering::Relaxed);
         }
         entries.len()
     }
 
-    fn lookup_in_tables(
-        base: Option<&Table>,
-        local: &Table,
+    #[inline]
+    fn lookup_in_maps(
+        base: Option<&FastMap<u64, Entry>>,
+        local: &FastMap<u64, Entry>,
         hash: u64,
         side: u8,
     ) -> Option<u16> {
-        let merged = match (base.and_then(|b| b.entries.get(&hash)), local.entries.get(&hash)) {
+        let merged = match (base.and_then(|b| b.get(&hash)), local.get(&hash)) {
             (Some(&b_ent), Some(&l_ent)) => {
                 let mut e = b_ent;
                 Self::update(&mut e, l_ent.depth, l_ent.side, l_ent.alg);
@@ -305,38 +338,50 @@ impl Perimeter {
             (Some(&b_ent), None) => Some(b_ent),
             (None, None) => None,
         };
-        merged.filter(|entry| entry.side == side).map(|entry| entry.depth)
+        merged
+            .filter(|entry| entry.side == side)
+            .map(|entry| entry.depth)
     }
 
     /// Returns the stored depth when `hash` is on `side`.
     pub fn is_in(&self, hash: u64, side: u8) -> Option<u16> {
-        let local = self.table.lock().expect("perimeter mutex");
+        let local = self.table.entries.read().expect("perimeter read lock");
         if let Some(base) = &self.base {
-            let b = base.lock().expect("perimeter base mutex");
-            Self::lookup_in_tables(Some(&b), &local, hash, side)
+            let b = base.entries.read().expect("perimeter base read lock");
+            Self::lookup_in_maps(Some(&b), &local, hash, side)
         } else {
             local
-                .entries
                 .get(&hash)
                 .filter(|entry| entry.side == side)
                 .map(|entry| entry.depth)
         }
     }
 
-    /// Evaluates all son hashes of an expansion under a single mutex lock,
-    /// calling `accept(son_idx, depth)` on hits.
-    pub fn for_each_hit(&self, sons: &[crate::search::tree::MoveHashData], side: u8, mut accept: impl FnMut(usize, u16)) {
-        let local = self.table.lock().expect("perimeter mutex");
+    /// Evaluates all son hashes of an expansion under a single shared read
+    /// lock, calling `accept(son_idx, depth)` on hits.
+    pub fn for_each_hit(
+        &self,
+        sons: &[crate::search::tree::MoveHashData],
+        side: u8,
+        mut accept: impl FnMut(usize, u16),
+    ) {
+        if sons.is_empty() {
+            return;
+        }
+        let local = self.table.entries.read().expect("perimeter read lock");
         if let Some(base) = &self.base {
-            let b = base.lock().expect("perimeter base mutex");
+            let b = base.entries.read().expect("perimeter base read lock");
             for (i, mh) in sons.iter().enumerate() {
-                if let Some(depth) = Self::lookup_in_tables(Some(&b), &local, mh.hash, side) {
+                if let Some(depth) = Self::lookup_in_maps(Some(&b), &local, mh.hash, side) {
                     accept(i, depth);
                 }
             }
         } else {
+            if local.is_empty() {
+                return;
+            }
             for (i, mh) in sons.iter().enumerate() {
-                if let Some(entry) = local.entries.get(&mh.hash) {
+                if let Some(entry) = local.get(&mh.hash) {
                     if entry.side == side {
                         accept(i, entry.depth);
                     }
@@ -345,30 +390,53 @@ impl Perimeter {
         }
     }
 
+    /// Writes dragonfly visitation markers into `out` under a single shared
+    /// read lock without allocating.
+    pub fn mark_dragonfly_visited_into(&self, hashes: &[u64], out: &mut Vec<i32>) {
+        out.clear();
+        out.resize(hashes.len(), 0);
+        if hashes.is_empty() {
+            return;
+        }
+        let map = self.table.entries.read().expect("perimeter read lock");
+        if map.is_empty() {
+            return;
+        }
+        for (i, &hash) in hashes.iter().enumerate() {
+            if let Some(entry) = map.get(&hash) {
+                out[i] = if entry.alg == SearchMode::Dragonfly as u8 {
+                    1
+                } else if entry.side == 0 {
+                    -2000 + entry.depth as i32
+                } else {
+                    0
+                };
+            }
+        }
+    }
+
     /// `dragonfly_mark_visited_hashes`: `1` for an earlier dragonfly visit,
     /// a negative attractive distance for a forward-frontier hit, else `0`.
     pub fn mark_dragonfly_visited(&self, hashes: &[u64]) -> Vec<i32> {
-        let table = self.table.lock().expect("perimeter mutex");
-        hashes
-            .iter()
-            .map(|hash| match table.entries.get(hash) {
-                Some(entry) if entry.alg == SearchMode::Dragonfly as u8 => 1,
-                Some(entry) if entry.side == 0 => -2000 + entry.depth as i32,
-                _ => 0,
-            })
-            .collect()
+        let mut out = Vec::with_capacity(hashes.len());
+        self.mark_dragonfly_visited_into(hashes, &mut out);
+        out
     }
 
     /// `dragonfly_update_perimeter`.
     pub fn update_dragonfly(&self, hashes: &[u64], visited: &[i32], depth: u16) {
+        if hashes.is_empty() {
+            return;
+        }
         let alg = SearchMode::Dragonfly as u8;
-        let mut table = self.table.lock().expect("perimeter mutex");
+        let mut map = self.table.entries.write().expect("perimeter write lock");
+        let mut added = 0usize;
         for (index, &hash) in hashes.iter().enumerate() {
             if visited.get(index).copied().unwrap_or(0) == 1 {
                 continue;
             }
 
-            if let Some(entry) = table.entries.get_mut(&hash) {
+            if let Some(entry) = map.get_mut(&hash) {
                 if entry.side == 1 {
                     if depth < entry.depth {
                         entry.depth = depth;
@@ -376,9 +444,13 @@ impl Perimeter {
                     entry.alg = alg;
                     continue;
                 }
+                entry.depth = depth;
+                entry.side = 1;
+                entry.alg = alg;
+                continue;
             }
 
-            table.entries.insert(
+            map.insert(
                 hash,
                 Entry {
                     depth,
@@ -386,7 +458,10 @@ impl Perimeter {
                     alg,
                 },
             );
-            table.total_entries += 1;
+            added += 1;
+        }
+        if added > 0 {
+            self.table.total_entries.fetch_add(added, Ordering::Relaxed);
         }
     }
 }
@@ -399,7 +474,6 @@ mod tests {
     use crate::level::Level;
 
     fn dummy_tree() -> Tree {
-        // Width/height only matter for board storage; this tree never scores.
         let board = Board::new(3, 3).unwrap();
         let level = Level {
             board,
@@ -444,8 +518,6 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // The perimeter is the only shared mutable state handed to scheduler
-        // threads; exercise it from several threads under Miri.
         let perimeter = Arc::new(Perimeter::new(10));
         let solved = Arc::new(AtomicBool::new(false));
         std::thread::scope(|scope| {
@@ -488,5 +560,6 @@ mod tests {
 
         ov1.commit_to(&base);
         assert_eq!(base.is_in(200, 0), Some(3));
+        assert_eq!(base.total_entries(), 2);
     }
 }
