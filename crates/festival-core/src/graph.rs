@@ -493,8 +493,8 @@ impl Graph {
         }
         self.do_iterations(false);
 
-        for i in 0..self.vertices_num {
-            if self.vertices[i].weight != INF {
+        for (i, vertex) in self.vertices.iter().enumerate().take(self.vertices_num) {
+            if vertex.weight != INF {
                 let (y, x) = level.coord(i / 4);
                 targets.set(y, x, 1);
             }
@@ -1365,13 +1365,13 @@ mod tests {
                 }
                 b.expand_sokoban_cloud();
                 let base = next_box_idx * 4;
-                for from in 0..4 {
+                for (from, vertex) in graph.vertices[base..base + 4].iter_mut().enumerate() {
                     if b.at_dir(next_by, next_bx, from) & SOKOBAN == 0 {
                         continue;
                     }
-                    for to in 0..4 {
+                    for (to, shift) in vertex.shift.iter_mut().enumerate() {
                         if b.at_dir(next_by, next_bx, to) & SOKOBAN != 0 {
-                            graph.vertices[base + from].shift[to] = (base + to) as u32;
+                            *shift = (base + to) as u32;
                         }
                     }
                 }

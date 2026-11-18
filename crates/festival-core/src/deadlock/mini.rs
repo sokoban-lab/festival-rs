@@ -12,8 +12,7 @@ fn get_move_with_most_packing(positions: &PositionSet) -> Option<(usize, usize)>
     let mut max_packed = -1i16;
     let mut best_connectivity = i16::MAX;
 
-    for i in 0..positions.len() {
-        let p = &positions.positions[i];
+    for (i, p) in positions.positions.iter().enumerate() {
         if p.position_deadlocked {
             continue;
         }

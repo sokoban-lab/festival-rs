@@ -191,8 +191,7 @@ impl PositionSet {
             indicators[(upper >> 6) as usize] |= 1u64 << (upper & 0x3f);
         }
 
-        for i in 0..existing {
-            let other = &self.positions[i];
+        for (i, other) in self.positions.iter().enumerate().take(existing) {
             let upper = (other.position_hash >> 50) as u32;
             if (indicators[(upper >> 6) as usize] >> (upper & 0x3f)) & 1 == 0 {
                 continue;

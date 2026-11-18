@@ -92,9 +92,8 @@ fn build_groups(patterns: &[DeadlockPattern]) -> PatternGroupSet {
     for pattern in patterns {
         let mut mask = 0u128;
         let mut value = 0u128;
-        for row in 0..pattern.y {
-            for col in 0..pattern.x {
-                let cell = pattern.pat[row][col];
+        for (row, pat_row) in pattern.pat.iter().enumerate().take(pattern.y) {
+            for (col, &cell) in pat_row.iter().enumerate().take(pattern.x) {
                 if cell == 0xff {
                     continue;
                 }
@@ -276,12 +275,12 @@ pub fn build_patterns(data: &[&str]) -> Vec<DeadlockPattern> {
             box_shift_x: 0,
         };
 
-        for row in 0..y {
+        for pat_row in pattern.pat.iter_mut().take(y) {
             let text = data.get(pos).copied().unwrap_or_default();
             pos += 1;
-            for col in 0..x {
+            for (col, cell) in pat_row.iter_mut().enumerate().take(x) {
                 let byte = text.as_bytes().get(col).copied().unwrap_or(b' ');
-                pattern.pat[row][col] = pattern_tile(byte);
+                *cell = pattern_tile(byte);
             }
         }
 
@@ -387,9 +386,8 @@ fn add_pattern_rotations(pattern: &mut DeadlockPattern, out: &mut Vec<DeadlockPa
 
 /// Exact cell matching. `0xff` in the pattern is a wildcard.
 pub fn pattern_at(pattern: &DeadlockPattern, board: &Board, y: usize, x: usize) -> bool {
-    for row in 0..pattern.y {
-        for col in 0..pattern.x {
-            let cell = pattern.pat[row][col];
+    for (row, pat_row) in pattern.pat.iter().enumerate().take(pattern.y) {
+        for (col, &cell) in pat_row.iter().enumerate().take(pattern.x) {
             if cell == 0xff {
                 continue;
             }

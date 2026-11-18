@@ -154,20 +154,20 @@ impl HungarianData {
 
 fn init_u_v(cost: &CostMatrix, hd: &mut HungarianData) {
     let n = hd.n;
-    for i in 0..n {
+    for (i, v) in hd.v.iter_mut().enumerate().take(n) {
         let mut min = HUNGARIAN_INF;
         for j in 0..n {
             min = min.min(cost.get(i, j));
         }
-        hd.v[i] = min;
+        *v = min;
     }
 
-    for j in 0..n {
+    for (j, u) in hd.u.iter_mut().enumerate().take(n) {
         let mut min = HUNGARIAN_INF;
-        for i in 0..n {
-            min = min.min(cost.get(i, j) - hd.v[i]);
+        for (i, &v) in hd.v.iter().enumerate().take(n) {
+            min = min.min(cost.get(i, j) - v);
         }
-        hd.u[j] = min;
+        *u = min;
     }
 }
 
@@ -464,8 +464,8 @@ fn init_from_prev(row: usize, cost: &CostMatrix, hd: &mut HungarianData, hc: &Hu
     hd.matched_v[row] = -1;
 
     let mut min = HUNGARIAN_INF;
-    for i in 0..n {
-        min = min.min(cost.get(row, i) - hd.u[i]);
+    for (i, &u) in hd.u.iter().enumerate().take(n) {
+        min = min.min(cost.get(row, i) - u);
     }
     hd.v[row] = min;
 

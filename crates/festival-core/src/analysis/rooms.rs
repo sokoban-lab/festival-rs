@@ -437,12 +437,7 @@ mod tests {
             }
             let graph = rooms.current_graph(&level, &b);
             let mut sum = 0i32;
-            for (base_row, graph_row) in rooms
-                .base_graph
-                .iter()
-                .zip(graph.iter())
-                .take(rooms.num)
-            {
+            for (base_row, graph_row) in rooms.base_graph.iter().zip(graph.iter()).take(rooms.num) {
                 for (base, current) in base_row.iter().zip(graph_row.iter()).take(rooms.num) {
                     sum += *base as i32 - *current as i32;
                 }

@@ -962,11 +962,7 @@ pub fn board_is_deadlocked(
         }
     }
 
-    if is_wobblers_deadlock(ctx, state, board, pull_mode)? {
-        return Ok(true);
-    }
-
-    Ok(false)
+    is_wobblers_deadlock(ctx, state, board, pull_mode)
 }
 
 pub fn move_is_deadlocked(
@@ -1289,12 +1285,12 @@ mod tests {
                 }
             }
             let mut adj = [[0u64; BOX_WORDS]; MAX_BOXES];
-            for j in 0..target_num {
+            for (j, adj_row) in adj.iter_mut().enumerate().take(target_num) {
                 for i in 0..box_num {
                     rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
                     if (rng >> 62) == 0 {
                         cost.set(i, j, 0);
-                        adj[j][i >> 6] |= 1u64 << (i & 63);
+                        adj_row[i >> 6] |= 1u64 << (i & 63);
                     }
                 }
             }

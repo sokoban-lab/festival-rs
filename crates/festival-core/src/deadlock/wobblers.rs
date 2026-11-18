@@ -188,8 +188,7 @@ fn is_better_wobblers_score(new_score: &ScoreElement, old_score: &ScoreElement) 
 fn get_best_wobblers_move(positions: &PositionSet) -> Option<(usize, usize)> {
     let mut best = None;
     let mut best_score = ScoreElement::default();
-    for i in 0..positions.len() {
-        let p = &positions.positions[i];
+    for (i, p) in positions.positions.iter().enumerate() {
         if p.position_deadlocked {
             continue;
         }

@@ -76,21 +76,17 @@ pub fn is_better_deadlock_score(new_score: &ScoreElement, old_score: &ScoreEleme
 fn choose_deadlock_son(positions: &PositionSet) -> Option<(usize, usize)> {
     let mut best: Option<(usize, usize)> = None;
     let mut best_score = ScoreElement::default();
-    for i in 0..positions.len() {
-        if positions.positions[i].position_deadlocked {
+    for (i, p) in positions.positions.iter().enumerate() {
+        if p.position_deadlocked {
             continue;
         }
-        for j in 0..positions.positions[i].moves.len() {
-            if positions.positions[i].move_deadlocked[j]
-                || positions.positions[i].place_in_positions[j].is_some()
-            {
+        for j in 0..p.moves.len() {
+            if p.move_deadlocked[j] || p.place_in_positions[j].is_some() {
                 continue;
             }
-            if best.is_none()
-                || is_better_deadlock_score(&positions.positions[i].scores[j], &best_score)
-            {
+            if best.is_none() || is_better_deadlock_score(&p.scores[j], &best_score) {
                 best = Some((i, j));
-                best_score = positions.positions[i].scores[j];
+                best_score = p.scores[j];
             }
         }
     }

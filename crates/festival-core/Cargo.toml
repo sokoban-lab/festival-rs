@@ -7,5 +7,4 @@ publish.workspace = true
 description = "An AI-assisted Rust port of Festival"
 
 [dependencies]
-log.workspace = true
 thiserror.workspace = true

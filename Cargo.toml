@@ -14,7 +14,6 @@ publish = false
 
 [workspace.dependencies]
 festival-core = { path = "crates/festival-core" }
-log = "0.4"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 mimalloc = "0.1"

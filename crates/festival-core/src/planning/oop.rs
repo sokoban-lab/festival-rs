@@ -20,8 +20,11 @@ fn get_parked_boxes(ctx: &LevelContext, step: usize, helper: &Helper) -> Board {
         .count();
     let step = step.max(init_num);
 
-    for i in 0..step.min(helper.parking_order.len()) {
-        let entry = helper.parking_order[i];
+    for entry in helper
+        .parking_order
+        .iter()
+        .take(step.min(helper.parking_order.len()))
+    {
         if (entry.until == -1 || entry.until as usize >= step) && entry.to >= 0 {
             let (y, x) = ctx.level.coord(entry.to as usize);
             parked.set(y, x, 1);

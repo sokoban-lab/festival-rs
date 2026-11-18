@@ -140,7 +140,10 @@ impl Perimeter {
             }
         }
         if added > 0 {
-            target.table.total_entries.fetch_add(added, Ordering::Relaxed);
+            target
+                .table
+                .total_entries
+                .fetch_add(added, Ordering::Relaxed);
         }
     }
 

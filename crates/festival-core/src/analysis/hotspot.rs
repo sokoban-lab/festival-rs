@@ -282,7 +282,12 @@ mod tests {
                 }
             }
             hotspots.find_hotspots(&level, &b, &mut h, &mut weights);
-            let mask_count = h.cells().iter().take(MAX_INNER).filter(|&&c| c != 0).count();
+            let mask_count = h
+                .cells()
+                .iter()
+                .take(MAX_INNER)
+                .filter(|&&c| c != 0)
+                .count();
             assert_eq!(hotspots.score(&level, &b), mask_count);
         }
     }
@@ -319,10 +324,7 @@ mod tests {
             graph.build(&level, &empty, false);
             for (p, &(y, x)) in level.coords.iter().enumerate() {
                 graph.find_targets_of_place_without_init_graph(
-                    &level,
-                    y as usize,
-                    x as usize,
-                    &mut mask,
+                    &level, y as usize, x as usize, &mut mask,
                 );
                 exp_reach[p] = count_targets(&mask);
             }

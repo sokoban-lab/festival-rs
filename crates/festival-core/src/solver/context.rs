@@ -50,10 +50,7 @@ impl LevelContext {
         })
     }
 
-    pub(crate) fn populate_shared_deadlock_tables(
-        &self,
-        state: &mut DeadlockState,
-    ) -> Result<()> {
+    pub(crate) fn populate_shared_deadlock_tables(&self, state: &mut DeadlockState) -> Result<()> {
         if let Some(tables) = self.deadlock_tables.get() {
             state.rooms = Arc::clone(&tables.rooms);
             state.mpdb = Arc::clone(&tables.mpdb);

@@ -88,8 +88,7 @@ fn is_better_xy_score(new_score: &ScoreElement, old_score: &ScoreElement) -> boo
 fn get_best_xy_move(positions: &PositionSet) -> Option<(usize, usize)> {
     let mut best = None;
     let mut best_score = ScoreElement::default();
-    for i in 0..positions.len() {
-        let p = &positions.positions[i];
+    for (i, p) in positions.positions.iter().enumerate() {
         if p.position_deadlocked {
             continue;
         }
