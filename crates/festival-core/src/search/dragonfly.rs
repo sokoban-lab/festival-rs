@@ -166,6 +166,10 @@ struct Dragonfly {
     nodes: Vec<DragonflyNode>,
     roots: Vec<Board>,
     queue: DragonflyQueue,
+    possible_scratch: Vec<bool>,
+    hashes_scratch: Vec<u64>,
+    packed_scratch: Vec<u16>,
+    scores_scratch: Vec<ScoreElement>,
 }
 
 impl Dragonfly {
@@ -174,6 +178,10 @@ impl Dragonfly {
             nodes: Vec::new(),
             roots: Vec::new(),
             queue: DragonflyQueue::default(),
+            possible_scratch: Vec::new(),
+            hashes_scratch: Vec::new(),
+            packed_scratch: Vec::new(),
+            scores_scratch: Vec::new(),
         }
     }
 
@@ -216,20 +224,22 @@ impl Dragonfly {
             return Ok(self.roots[node.board as usize]);
         }
 
-        let mut moves: Vec<(u16, u16)> = Vec::new();
+        let mut moves = [(0u16, 0u16); MAX_SOL_LEN];
+        let mut moves_len = 0usize;
         while node.board == NO_ROOT {
             if node.father < 0 {
                 return Err(SolveError::Internal("dragonfly: missing root".into()));
             }
-            if moves.len() >= MAX_SOL_LEN {
+            if moves_len >= MAX_SOL_LEN {
                 return Err(SolveError::TooManyMoves);
             }
-            moves.push((node.move_from, node.move_to));
+            moves[moves_len] = (node.move_from, node.move_to);
+            moves_len += 1;
             node = self.nodes[node.father as usize];
         }
 
         let mut board = self.roots[node.board as usize];
-        for &(from, to) in moves.iter().rev() {
+        for &(from, to) in moves[..moves_len].iter().rev() {
             let (from_y, from_x) = ctx.level.coord(from as usize);
             if board.cell(from_y, from_x) & BOX == 0 {
                 return Err(SolveError::Internal("dragonfly: missing box".into()));
@@ -244,7 +254,7 @@ impl Dragonfly {
         }
 
         board.clear_sokoban_inplace();
-        if player as usize >= 4 || moves.is_empty() {
+        if player as usize >= 4 || moves_len == 0 {
             return Err(SolveError::Internal("dragonfly: bad player".into()));
         }
         let (to_y, to_x) = ctx.level.coord(moves[0].1 as usize);
@@ -259,8 +269,7 @@ impl Dragonfly {
                 "dragonfly: player outside board".into(),
             ));
         }
-        board.or(sok_y as usize, sok_x as usize, SOKOBAN);
-        board.expand_sokoban_cloud();
+        board.expand_sokoban_cloud_from(sok_y as usize, sok_x as usize);
 
         Ok(board)
     }
@@ -275,29 +284,30 @@ impl Dragonfly {
 
     /// `mark_moves_when_corral`.
     fn mark_moves_when_corral(
-        &self,
+        possible: &mut Vec<bool>,
         ctx: &LevelContext,
         deadlock: &DeadlockState,
         board: &Board,
         moves: &[Move],
         last_move: Option<usize>,
-    ) -> Vec<bool> {
-        let mut possible = vec![true; moves.len()];
+    ) {
+        possible.clear();
+        possible.resize(moves.len(), true);
 
         if crate::bfs::get_connectivity(&ctx.level, board) == 1 {
-            return possible;
+            return;
         }
 
         let walls =
             turn_fixed_boxes_into_walls(&ctx.level, &ctx.distances, board, &deadlock.envelopes);
         let Some(options) = detect_corral(&ctx.level, &ctx.distances, &walls) else {
-            return possible;
+            return;
         };
         let _ = options;
 
         let Some(last_move) = last_move else {
             // A root has no incoming move; the C++ code indexes -1 here.
-            return possible;
+            return;
         };
         let (y, x) = ctx.level.coord(last_move);
 
@@ -327,8 +337,6 @@ impl Dragonfly {
                 possible[i] = false;
             }
         }
-
-        possible
     }
 
     /// `dragonfly_expand_node`; returns whether the node was expanded.
@@ -374,28 +382,40 @@ impl Dragonfly {
         } else {
             None
         };
-        let possible = self.mark_moves_when_corral(ctx, deadlock, &board, &moves, last_move);
+        Self::mark_moves_when_corral(
+            &mut self.possible_scratch,
+            ctx,
+            deadlock,
+            &board,
+            &moves,
+            last_move,
+        );
 
-        let mut hashes = Vec::with_capacity(moves.len());
-        let mut packed = Vec::with_capacity(moves.len());
+        self.hashes_scratch.clear();
+        self.packed_scratch.clear();
+        self.hashes_scratch.reserve(moves.len());
+        self.packed_scratch.reserve(moves.len());
         for mv in &moves {
             let mut child = board;
             apply_move(&mut child, mv, SearchMode::Normal, &ctx.level);
-            hashes.push(child.hash());
-            packed.push(child.boxes_on_bases(&ctx.level.initial) as u16);
+            self.hashes_scratch.push(child.hash());
+            self.packed_scratch
+                .push(child.boxes_on_bases(&ctx.level.initial) as u16);
         }
 
-        let mut visited = perimeter.mark_dragonfly_visited(&hashes);
+        let mut visited_scratch = perimeter.mark_dragonfly_visited(&self.hashes_scratch);
 
         let mut base_score = ScoreElement::default();
-        let mut scores = vec![ScoreElement::default(); moves.len()];
+        self.scores_scratch.clear();
+        self.scores_scratch
+            .resize(moves.len(), ScoreElement::default());
         compute_base_distance(
             &ctx.level,
             &ctx.distances,
             &board,
             &mut base_score,
             &moves,
-            &mut scores,
+            &mut self.scores_scratch,
         );
 
         if e.dist >= 0 && base_score.dist_to_targets != e.dist {
@@ -403,15 +423,15 @@ impl Dragonfly {
         }
 
         for i in 0..moves.len() {
-            if visited[i] == 1 {
+            if visited_scratch[i] == 1 {
                 continue;
             }
-            if !possible[i] {
-                visited[i] = 1;
+            if !self.possible_scratch[i] {
+                visited_scratch[i] = 1;
                 continue;
             }
-            if scores[i].dist_to_targets >= INF as i32 {
-                visited[i] = 1;
+            if self.scores_scratch[i].dist_to_targets >= INF as i32 {
+                visited_scratch[i] = 1;
                 continue;
             }
 
@@ -422,15 +442,15 @@ impl Dragonfly {
                 move_from: moves[i].from,
                 move_to: moves[i].to,
                 player_position: moves[i].sokoban_position,
-                dist: scores[i].dist_to_targets,
-                packed: packed[i],
+                dist: self.scores_scratch[i].dist_to_targets,
+                packed: self.packed_scratch[i],
             };
 
-            if visited[i] < 0 {
+            if visited_scratch[i] < 0 {
                 if !helper.perimeter_found {
                     helper.perimeter_found = true;
                 }
-                node.dist = visited[i];
+                node.dist = visited_scratch[i];
             }
 
             self.nodes.push(node);
@@ -438,7 +458,7 @@ impl Dragonfly {
             self.queue.insert(&self.nodes, new_index);
         }
 
-        perimeter.update_dragonfly(&hashes, &visited, e.depth + 1);
+        perimeter.update_dragonfly(&self.hashes_scratch, &visited_scratch, e.depth + 1);
         Ok(true)
     }
 }

@@ -9,6 +9,7 @@ use crate::graph::Graph;
 use crate::moves::Move;
 use crate::planning::{ImagineData, OopData, ParkOrder};
 use crate::search::features::RequestData;
+use crate::search::score::ScoreElement;
 use crate::solver::LevelContext;
 
 #[derive(Debug)]
@@ -35,9 +36,14 @@ pub struct Helper {
     pub oop: Option<OopData>,
     pub imagine: Option<ImagineData>,
 
-    /// Reused `find_possible_moves` buffers (moves scratch and box graph).
+    /// Reused `find_possible_moves` and per-expansion advisor scratch buffers.
     pub move_scratch: Vec<Move>,
+    pub box_moves_scratch: Vec<Move>,
     pub graph_scratch: Option<Graph>,
+    pub advisor_moves: Vec<Move>,
+    pub advisor_scores: Vec<ScoreElement>,
+    pub advisor_expanded: Vec<bool>,
+    pub advisor_matched: Vec<ScoreElement>,
 }
 
 impl Default for Helper {
@@ -64,7 +70,12 @@ impl Default for Helper {
             oop: None,
             imagine: None,
             move_scratch: Vec::new(),
+            box_moves_scratch: Vec::new(),
             graph_scratch: None,
+            advisor_moves: Vec::new(),
+            advisor_scores: Vec::new(),
+            advisor_expanded: Vec::new(),
+            advisor_matched: Vec::new(),
         }
     }
 }
@@ -96,7 +107,12 @@ impl Helper {
             oop: None,
             imagine: None,
             move_scratch: Vec::new(),
+            box_moves_scratch: Vec::new(),
             graph_scratch: None,
+            advisor_moves: Vec::new(),
+            advisor_scores: Vec::new(),
+            advisor_expanded: Vec::new(),
+            advisor_matched: Vec::new(),
         }
     }
 

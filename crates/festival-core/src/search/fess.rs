@@ -166,8 +166,7 @@ pub fn run_fess_into(
 
     let root_score = tree.nodes[tree.expansions[new_node as usize].node as usize].score;
     helper.requests.clear();
-    helper.requests.add_request(&root_score)?;
-    let label = helper.requests.label_of_score(&root_score, false);
+    let label = helper.requests.add_request(&root_score)?;
     tree.add_label_to_last_node(label, ctx, helper)?;
 
     perimeter.insert_node(ctx, tree, new_node, true);
@@ -193,18 +192,19 @@ pub fn run_fess_into(
             break;
         }
 
-        let request = if (iteration & 1) == 1 || helper.perimeter_found {
+        let label = if (iteration & 1) == 1 || helper.perimeter_found {
             helper
                 .requests
-                .next_request()
+                .next_request_label()
                 .ok_or_else(|| SolveError::Internal("no requests".into()))?
         } else {
             let past = tree.expansions[best_so_far as usize].best_past;
             let score = tree.nodes[past as usize].score;
-            helper
-                .requests
-                .request_of_score(&score)
-                .ok_or_else(|| SolveError::Internal("missing request".into()))?
+            let label = helper.requests.label_of_score(&score, false);
+            if label < 0 {
+                return Err(SolveError::Internal("missing request".into()));
+            }
+            label
         };
 
         let (tree_weight, tree_pos, tree_son) =
@@ -217,7 +217,6 @@ pub fn run_fess_into(
                     }
                 }
             } else {
-                let label = helper.requests.label_of_request(&request);
                 if !(0..MAX_TREE_LABELS as i32).contains(&label) {
                     return Err(SolveError::Internal("bad request label".into()));
                 }
@@ -265,8 +264,7 @@ pub fn run_fess_into(
 
         let past = tree.expansions[new_node as usize].best_past;
         let past_score = tree.nodes[past as usize].score;
-        helper.requests.add_request(&past_score)?;
-        let label = helper.requests.label_of_score(&past_score, false);
+        let label = helper.requests.add_request(&past_score)?;
         tree.add_label_to_last_node(label, ctx, helper)?;
 
         if tree.best_so_far_is_better(best_so_far, new_node) {

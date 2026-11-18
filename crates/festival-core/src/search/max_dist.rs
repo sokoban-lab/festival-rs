@@ -2,7 +2,7 @@
 
 use crate::analysis::match_distance::compute_match_distance;
 use crate::constants::SearchMode;
-use crate::search::score::ScoreElement;
+use crate::search::helper::Helper;
 use crate::search::tree::Tree;
 use crate::solver::LevelContext;
 
@@ -12,6 +12,7 @@ pub fn set_max_dist_data_in_node(
     tree: &mut Tree,
     ctx: &LevelContext,
     expansion: u32,
+    helper: &mut Helper,
 ) -> crate::error::Result<()> {
     if !tree.pull_mode {
         return Ok(());
@@ -29,12 +30,16 @@ pub fn set_max_dist_data_in_node(
     };
     let board = tree.expansion_board(expansion)?;
 
-    let mut moves = Vec::with_capacity(count);
-    let mut scores: Vec<ScoreElement> = Vec::with_capacity(count);
+    helper.advisor_moves.clear();
+    helper.advisor_scores.clear();
+    helper.advisor_moves.reserve(count);
+    helper.advisor_scores.reserve(count);
     for i in 0..count {
         let move_hash = tree.move_hashes[start + i];
-        moves.push(move_hash.move_data);
-        scores.push(tree.nodes[move_hash.node as usize].score);
+        helper.advisor_moves.push(move_hash.move_data);
+        helper
+            .advisor_scores
+            .push(tree.nodes[move_hash.node as usize].score);
     }
 
     let mut base_score = tree.nodes[node as usize].score;
@@ -43,12 +48,12 @@ pub fn set_max_dist_data_in_node(
         &ctx.distances,
         &board,
         &mut base_score,
-        &moves,
-        &mut scores,
+        &helper.advisor_moves,
+        &mut helper.advisor_scores,
     );
     tree.nodes[node as usize].score = base_score;
 
-    for (i, score) in scores.iter().enumerate() {
+    for (i, score) in helper.advisor_scores.iter().enumerate() {
         let place = tree.move_hashes[start + i].node;
         tree.nodes[place as usize].score.dist_to_targets = score.dist_to_targets;
     }

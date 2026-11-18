@@ -59,37 +59,43 @@ pub(crate) fn put_sokoban_in_zone(board: &mut Board, zones: &[u32; MAX_INNER], z
     board.expand_sokoban_cloud();
 }
 
-fn has_pull_moves(ctx: &LevelContext, tree: &mut Tree, board: &Board) -> Result<bool> {
-    let mut helper = Helper::default();
-    helper.init_scored_distance(ctx, board, true);
-    let (moves, _) = find_possible_moves(
-        ctx,
-        board,
-        true,
-        SearchMode::Normal,
-        &mut helper,
-        &mut tree.deadlock,
-    )?;
-    Ok(!moves.is_empty())
-}
-
-fn declare_roots(
+fn collect_valid_start_zones(
     ctx: &LevelContext,
     tree: &mut Tree,
     helper: &Helper,
     board: &Board,
     zones: &[u32; MAX_INNER],
     zones_num: usize,
-) -> Result<()> {
-    for z in 0..zones_num as u32 {
-        let mut c = *board;
-        put_sokoban_in_zone(&mut c, zones, z);
-        if !has_pull_moves(ctx, tree, &c)? {
-            continue;
-        }
-        tree.add_board_to_tree(ctx, helper, &c)?;
+) -> Result<Vec<Board>> {
+    let mut valid = Vec::with_capacity(zones_num);
+    if zones_num == 0 {
+        return Ok(valid);
     }
-    Ok(())
+    let mut probe_helper = tree.deadlock.take_aux_helper();
+    let outcome = (|| -> Result<()> {
+        probe_helper.init_scored_distance(ctx, board, true);
+        for z in 0..zones_num as u32 {
+            let mut c = *board;
+            put_sokoban_in_zone(&mut c, zones, z);
+            let (moves, _) = find_possible_moves(
+                ctx,
+                &c,
+                true,
+                SearchMode::Normal,
+                &mut probe_helper,
+                &mut tree.deadlock,
+            )?;
+            if moves.is_empty() {
+                continue;
+            }
+            tree.add_board_to_tree(ctx, helper, &c)?;
+            valid.push(c);
+        }
+        Ok(())
+    })();
+    tree.deadlock.put_aux_helper(probe_helper);
+    outcome?;
+    Ok(valid)
 }
 
 fn expansion_score(tree: &Tree, expansion: ExpansionId) -> crate::search::score::ScoreElement {
@@ -130,17 +136,11 @@ pub fn run_packing(
 
     let (zones, zones_num) = compute_start_zones(ctx);
     helper.requests.clear();
-    declare_roots(ctx, tree, helper, &b, &zones, zones_num)?;
+    let valid_roots = collect_valid_start_zones(ctx, tree, helper, &b, &zones, zones_num)?;
 
     let mut best_so_far: Option<ExpansionId> = None;
 
-    for z in 0..zones_num as u32 {
-        let mut c = b;
-        put_sokoban_in_zone(&mut c, &zones, z);
-
-        if !has_pull_moves(ctx, tree, &c)? {
-            continue;
-        }
+    for c in valid_roots {
         if start_zone_is_deadlocked(ctx, &mut tree.deadlock, &c)? {
             continue;
         }
@@ -149,8 +149,7 @@ pub fn run_packing(
         tree.set_advisors_and_weights(root, ctx, helper)?;
 
         let score = expansion_score(tree, root);
-        helper.requests.add_pack_request(&score)?;
-        let label = helper.requests.label_of_score(&score, true);
+        let label = helper.requests.add_pack_request(&score)?;
         tree.add_label_to_last_node(label, ctx, helper)?;
 
         if search_mode == SearchMode::GirlSearch {
@@ -184,18 +183,19 @@ pub fn run_packing(
             break;
         }
 
-        let request = if (iteration & 1) == 1 || helper.perimeter_found {
+        let label = if (iteration & 1) == 1 || helper.perimeter_found {
             helper
                 .requests
-                .next_pack_request()
+                .next_pack_request_label()
                 .ok_or_else(|| SolveError::Internal("no pack requests".into()))?
         } else {
             let best = best_so_far.ok_or_else(|| SolveError::Internal("no packing best".into()))?;
             let score = expansion_score(tree, best);
-            helper
-                .requests
-                .pack_request_of_score(&score)
-                .ok_or_else(|| SolveError::Internal("missing pack request".into()))?
+            let label = helper.requests.label_of_score(&score, true);
+            if label < 0 {
+                return Err(SolveError::Internal("missing pack request".into()));
+            }
+            label
         };
 
         let (tree_weight, tree_pos, tree_son) =
@@ -208,7 +208,6 @@ pub fn run_packing(
                     }
                 }
             } else {
-                let label = helper.requests.label_of_pack_request(&request);
                 tree.best_move_in_tree(usize::try_from(label).unwrap_or(usize::MAX), ctx)
             };
 
@@ -255,8 +254,7 @@ pub fn run_packing(
         }
 
         let score = expansion_score(tree, child);
-        helper.requests.add_pack_request(&score)?;
-        let label = helper.requests.label_of_score(&score, true);
+        let label = helper.requests.add_pack_request(&score)?;
         tree.add_label_to_last_node(label, ctx, helper)?;
 
         if let Some(best) = best_so_far {

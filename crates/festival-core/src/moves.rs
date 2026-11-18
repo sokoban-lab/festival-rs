@@ -191,7 +191,8 @@ pub fn find_possible_moves(
         _ => Graph::new(level),
     };
     let mut moves: Vec<Move> = Vec::new();
-    let mut box_moves: Vec<Move> = Vec::new();
+    let mut box_moves = std::mem::take(&mut helper.box_moves_scratch);
+    box_moves.clear();
 
     let result = (|| -> Result<(Vec<Move>, bool)> {
         for index in 0..level.index_num() {
@@ -287,6 +288,7 @@ pub fn find_possible_moves(
         Ok((moves, has_corral))
     })();
     helper.move_scratch = scratch;
+    helper.box_moves_scratch = box_moves;
     helper.graph_scratch = Some(graph);
     result
 }

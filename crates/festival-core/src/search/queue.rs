@@ -30,6 +30,7 @@ impl IndexedHeap {
         self.elements.clear();
     }
 
+    #[inline]
     fn is_better(
         first: u32,
         second: u32,
@@ -57,6 +58,26 @@ impl IndexedHeap {
         first < second
     }
 
+    fn sift_up(
+        &mut self,
+        mut index: usize,
+        expansions: &[ExpansionData],
+        pull_mode: bool,
+        search_mode: SearchMode,
+    ) {
+        let value = self.elements[index];
+        while index > 0 {
+            let parent = (index - 1) / 2;
+            let parent_val = self.elements[parent];
+            if !Self::is_better(value, parent_val, expansions, pull_mode, search_mode) {
+                break;
+            }
+            self.elements[index] = parent_val;
+            index = parent;
+        }
+        self.elements[index] = value;
+    }
+
     fn sift_down(
         &mut self,
         mut index: usize,
@@ -65,40 +86,31 @@ impl IndexedHeap {
         search_mode: SearchMode,
     ) {
         let size = self.elements.len();
+        let value = self.elements[index];
         loop {
             let left = index * 2 + 1;
-            let right = index * 2 + 2;
-            let mut largest = index;
-
-            if left < size
-                && Self::is_better(
-                    self.elements[left],
-                    self.elements[largest],
-                    expansions,
-                    pull_mode,
-                    search_mode,
-                )
-            {
-                largest = left;
-            }
-            if right < size
-                && Self::is_better(
-                    self.elements[right],
-                    self.elements[largest],
-                    expansions,
-                    pull_mode,
-                    search_mode,
-                )
-            {
-                largest = right;
-            }
-
-            if largest == index {
+            if left >= size {
                 break;
             }
-            self.elements.swap(index, largest);
-            index = largest;
+            let right = left + 1;
+            let mut best_child = left;
+            let mut best_val = self.elements[left];
+
+            if right < size {
+                let right_val = self.elements[right];
+                if Self::is_better(right_val, best_val, expansions, pull_mode, search_mode) {
+                    best_child = right;
+                    best_val = right_val;
+                }
+            }
+
+            if !Self::is_better(best_val, value, expansions, pull_mode, search_mode) {
+                break;
+            }
+            self.elements[index] = best_val;
+            index = best_child;
         }
+        self.elements[index] = value;
     }
 
     pub fn insert(
@@ -108,24 +120,9 @@ impl IndexedHeap {
         pull_mode: bool,
         search_mode: SearchMode,
     ) {
-        let mut index = self.elements.len();
+        let index = self.elements.len();
         self.elements.push(value);
-
-        while index > 0 {
-            let parent = (index - 1) / 2;
-            if !Self::is_better(
-                value,
-                self.elements[parent],
-                expansions,
-                pull_mode,
-                search_mode,
-            ) {
-                break;
-            }
-            self.elements[index] = self.elements[parent];
-            index = parent;
-        }
-        self.elements[index] = value;
+        self.sift_up(index, expansions, pull_mode, search_mode);
     }
 
     pub fn pop_max(
@@ -143,6 +140,33 @@ impl IndexedHeap {
         Some(result)
     }
 
+    /// Finds `value` starting from the root and leaf end (since
+    /// `check_if_perimeter_reached` always updates `last_expansion()`, which
+    /// was just inserted near the end of `elements`).
+    #[inline]
+    fn find_index(&self, value: u32) -> Option<usize> {
+        if self.elements.first() == Some(&value) {
+            return Some(0);
+        }
+        self.elements.iter().rposition(|&e| e == value)
+    }
+
+    /// Updates `value` in-place if present, or inserts it if absent.
+    pub fn update_or_insert(
+        &mut self,
+        value: u32,
+        expansions: &[ExpansionData],
+        pull_mode: bool,
+        search_mode: SearchMode,
+    ) {
+        if let Some(index) = self.find_index(value) {
+            self.sift_down(index, expansions, pull_mode, search_mode);
+            self.sift_up(index, expansions, pull_mode, search_mode);
+        } else {
+            self.insert(value, expansions, pull_mode, search_mode);
+        }
+    }
+
     /// Removes a value by replacing it with the last element and restoring the
     /// heap. Returns `false` when the value is not present.
     pub fn remove(
@@ -152,29 +176,14 @@ impl IndexedHeap {
         pull_mode: bool,
         search_mode: SearchMode,
     ) -> bool {
-        let Some(index) = self.elements.iter().position(|element| *element == value) else {
+        let Some(index) = self.find_index(value) else {
             return false;
         };
 
         self.elements.swap_remove(index);
         if index < self.elements.len() {
             self.sift_down(index, expansions, pull_mode, search_mode);
-            let mut current = index;
-            while current > 0 {
-                let parent = (current - 1) / 2;
-                if Self::is_better(
-                    self.elements[current],
-                    self.elements[parent],
-                    expansions,
-                    pull_mode,
-                    search_mode,
-                ) {
-                    self.elements.swap(current, parent);
-                    current = parent;
-                } else {
-                    break;
-                }
-            }
+            self.sift_up(index, expansions, pull_mode, search_mode);
         }
         true
     }
@@ -282,8 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn remove_restores_heap() {
-        let expansions = vec![
+    fn remove_and_update_restore_heap() {
+        let mut expansions = vec![
             expansion(0, 0, 0),
             expansion(1, 1, 0),
             expansion(2, 2, 0),
@@ -297,5 +306,13 @@ mod tests {
         assert!(!heap.remove(2, &expansions, false, SearchMode::Normal));
         heap.verify(&expansions, false, SearchMode::Normal);
         assert_eq!(heap.len(), 3);
+
+        expansions[3].best_weight = -1999;
+        heap.update_or_insert(3, &expansions, false, SearchMode::Normal);
+        heap.verify(&expansions, false, SearchMode::Normal);
+        assert_eq!(
+            heap.pop_max(&expansions, false, SearchMode::Normal),
+            Some(3)
+        );
     }
 }

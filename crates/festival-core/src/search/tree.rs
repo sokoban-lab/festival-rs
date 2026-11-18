@@ -650,9 +650,9 @@ impl Tree {
         helper: &mut Helper,
     ) -> Result<()> {
         if self.search_mode == SearchMode::NaiveSearch {
-            crate::search::naive::set_naive_data_in_node(self, ctx, expansion)?;
+            crate::search::naive::set_naive_data_in_node(self, ctx, expansion, helper)?;
         }
-        set_max_dist_data_in_node(self, ctx, expansion)?;
+        set_max_dist_data_in_node(self, ctx, expansion, helper)?;
         self.set_imagine_data_in_node(expansion, ctx, helper)?;
 
         let (node, start, count) = {
@@ -662,9 +662,15 @@ impl Tree {
         let board = self.expansion_board(expansion)?;
         let base_score = self.nodes[node as usize].score;
 
-        let mut moves = Vec::with_capacity(count);
-        let mut scores = Vec::with_capacity(count);
-        let mut already_expanded = Vec::with_capacity(count);
+        let mut moves = std::mem::take(&mut helper.advisor_moves);
+        let mut scores = std::mem::take(&mut helper.advisor_scores);
+        let mut already_expanded = std::mem::take(&mut helper.advisor_expanded);
+        moves.clear();
+        scores.clear();
+        already_expanded.clear();
+        moves.reserve(count);
+        scores.reserve(count);
+        already_expanded.reserve(count);
 
         for i in 0..count {
             let move_hash = self.move_hashes[start + i];
@@ -674,7 +680,7 @@ impl Tree {
             already_expanded.push(child.expansion != NONE_EXPANSION);
         }
 
-        let advisors = set_advisors_inner(
+        let advisors_res = set_advisors_inner(
             ctx,
             helper,
             &mut self.deadlock,
@@ -685,7 +691,11 @@ impl Tree {
             self.pull_mode,
             self.search_mode,
             &already_expanded,
-        )?;
+        );
+        helper.advisor_moves = moves;
+        helper.advisor_scores = scores;
+        helper.advisor_expanded = already_expanded;
+        let advisors = advisors_res?;
         self.expansions[expansion as usize].advisors = advisors;
 
         for i in 0..count {
@@ -724,7 +734,7 @@ impl Tree {
         &mut self,
         expansion: ExpansionId,
         ctx: &LevelContext,
-        helper: &Helper,
+        helper: &mut Helper,
     ) -> Result<()> {
         if self.search_mode == SearchMode::RevSearch && self.pull_mode {
             let (node, start, count) = {
@@ -732,8 +742,12 @@ impl Tree {
                 (e.node, e.move_hash_place, e.moves_num as usize)
             };
             let board = self.expansion_board(expansion)?;
-            let mut moves = Vec::with_capacity(count);
-            let mut scores = Vec::with_capacity(count);
+            let mut moves = std::mem::take(&mut helper.advisor_moves);
+            let mut scores = std::mem::take(&mut helper.advisor_scores);
+            moves.clear();
+            scores.clear();
+            moves.reserve(count);
+            scores.reserve(count);
             for i in 0..count {
                 let move_hash = self.move_hashes[start + i];
                 moves.push(move_hash.move_data);
@@ -747,6 +761,8 @@ impl Tree {
                 let place = self.move_hashes[start + i].node;
                 self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
             }
+            helper.advisor_moves = moves;
+            helper.advisor_scores = scores;
             return Ok(());
         }
 
@@ -778,12 +794,16 @@ impl Tree {
             helper.imagined_hf_board
         };
 
-        let mut moves = Vec::with_capacity(count);
-        let mut scores = Vec::with_capacity(count);
+        helper.advisor_moves.clear();
+        helper.advisor_scores.clear();
+        helper.advisor_moves.reserve(count);
+        helper.advisor_scores.reserve(count);
         for i in 0..count {
             let move_hash = self.move_hashes[start + i];
-            moves.push(move_hash.move_data);
-            scores.push(self.nodes[move_hash.node as usize].score);
+            helper.advisor_moves.push(move_hash.move_data);
+            helper
+                .advisor_scores
+                .push(self.nodes[move_hash.node as usize].score);
         }
 
         let mut base_score = self.nodes[node as usize].score;
@@ -793,13 +813,13 @@ impl Tree {
             &board,
             &imagined,
             &mut base_score,
-            &moves,
-            &mut scores,
+            &helper.advisor_moves,
+            &mut helper.advisor_scores,
             self.search_mode,
         );
         self.nodes[node as usize].score = base_score;
 
-        for (i, score) in scores.iter().enumerate() {
+        for (i, score) in helper.advisor_scores.iter().enumerate() {
             let place = self.move_hashes[start + i].node;
             self.nodes[place as usize].score.dist_to_imagined = score.dist_to_imagined;
         }
@@ -1182,13 +1202,16 @@ impl Tree {
         }
         let label = label as usize;
         let has_move = self.expansions[expansion as usize].best_move != NO_MOVE;
-        {
-            let expansions: &[ExpansionData] = &self.expansions;
-            self.queues[label].remove(expansion, expansions, self.pull_mode, self.search_mode);
-        }
+        let expansions: &[ExpansionData] = &self.expansions;
         if has_move {
-            let expansions: &[ExpansionData] = &self.expansions;
-            self.queues[label].insert(expansion, expansions, self.pull_mode, self.search_mode);
+            self.queues[label].update_or_insert(
+                expansion,
+                expansions,
+                self.pull_mode,
+                self.search_mode,
+            );
+        } else {
+            self.queues[label].remove(expansion, expansions, self.pull_mode, self.search_mode);
         }
     }
 

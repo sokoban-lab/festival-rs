@@ -88,6 +88,7 @@ fn choose_advisor(
 }
 
 /// Chooses a child by the minimum-cost box-to-target assignment distance.
+#[allow(clippy::too_many_arguments)]
 fn matching_advisor(
     ctx: &LevelContext,
     board: &Board,
@@ -96,6 +97,7 @@ fn matching_advisor(
     scores: &[ScoreElement],
     already_expanded: &[bool],
     search_mode: SearchMode,
+    matched: &mut Vec<ScoreElement>,
 ) -> i32 {
     if !matches!(
         search_mode,
@@ -119,14 +121,15 @@ fn matching_advisor(
     }
 
     let mut base = *base_score;
-    let mut matched = scores.to_vec();
+    matched.clear();
+    matched.extend_from_slice(scores);
     crate::analysis::match_distance::compute_match_distance(
         &ctx.level,
         &ctx.distances,
         board,
         &mut base,
         moves,
-        &mut matched,
+        matched,
     );
 
     let mut best = -1i32;
@@ -203,7 +206,7 @@ fn discard_advisors_in_base_search(moves: &[Move], advisors: &mut AdvisorsElemen
 #[allow(clippy::too_many_arguments)]
 pub fn set_advisors_inner(
     ctx: &LevelContext,
-    helper: &Helper,
+    helper: &mut Helper,
     deadlock: &mut DeadlockState,
     board: &Board,
     base_score: &ScoreElement,
@@ -294,6 +297,7 @@ pub fn set_advisors_inner(
         scores,
         already_expanded,
         search_mode,
+        &mut helper.advisor_matched,
     );
 
     Ok(advisors)
