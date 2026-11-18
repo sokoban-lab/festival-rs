@@ -75,13 +75,18 @@ impl GirlParams {
 
 /// Sum of the per-box pull distance to the nearest target (`get_girl_distance`).
 pub fn get_girl_distance(board: &crate::board::Board, girl: &GirlParams) -> i32 {
+    let cells = board.cells();
+    let width = board.width();
     let mut sum = 0i32;
     for y in 0..board.height() {
-        for x in 0..board.width() {
-            if board.cell(y, x) & BOX == 0 {
-                continue;
+        let row = y * MAX_SIZE;
+        for (&cell, &d) in cells[row..row + width]
+            .iter()
+            .zip(&girl.distance[row..row + width])
+        {
+            if cell & BOX != 0 {
+                sum += d as i32;
             }
-            sum += girl.distance[crate::board::Board::flat_index(y, x)] as i32;
         }
     }
     sum

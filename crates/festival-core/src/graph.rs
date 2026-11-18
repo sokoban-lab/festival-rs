@@ -45,6 +45,11 @@ pub struct Graph {
     current_scratch: Vec<u32>,
     next_scratch: Vec<u32>,
     blocked_scratch: Board,
+    static_impossible: Board,
+    base_impossible: Board,
+    tmp_board: Board,
+    dirty_cells: [u16; 9],
+    dirty_len: u8,
 }
 
 impl Graph {
@@ -61,6 +66,11 @@ impl Graph {
             current_scratch: Vec::with_capacity(vertices_num),
             next_scratch: Vec::with_capacity(vertices_num),
             blocked_scratch: Board::new(width, height).expect("level dimensions"),
+            static_impossible: Board::new(width, height).expect("level dimensions"),
+            base_impossible: Board::new(width, height).expect("level dimensions"),
+            tmp_board: Board::new(width, height).expect("level dimensions"),
+            dirty_cells: [0; 9],
+            dirty_len: 0,
         }
     }
 
@@ -78,6 +88,11 @@ impl Graph {
             current_scratch: Vec::with_capacity(vertices_num),
             next_scratch: Vec::with_capacity(vertices_num),
             blocked_scratch: Board::new(width, height).expect("level dimensions"),
+            static_impossible: Board::new(width, height).expect("level dimensions"),
+            base_impossible: Board::new(width, height).expect("level dimensions"),
+            tmp_board: Board::new(width, height).expect("level dimensions"),
+            dirty_cells: [0; 9],
+            dirty_len: 0,
         }
     }
 
@@ -511,9 +526,12 @@ impl Graph {
         }
     }
 
-    fn clear_shift(&mut self) {
+    fn reset_for_box_moves(&mut self) {
         for vertex in &mut self.vertices {
             vertex.shift = [0; 4];
+            vertex.weight = INF;
+            vertex.src = -1;
+            vertex.reversible = false;
         }
     }
 
@@ -524,15 +542,27 @@ impl Graph {
         box_index: usize,
         pull_mode: bool,
     ) {
-        let mut b = *board_in;
-        self.clear_shift();
-        self.set_weights_infinity();
+        let (box_y, box_x) = level.coord(box_index);
+        debug_assert!(board_in.cell(box_y, box_x) & BOX != 0);
+        let mut b = Board::new(board_in.width(), board_in.height()).expect("dims");
+        b.copy_active_from(board_in);
+        b.and_not(box_y, box_x, BOX);
+        self.mark_box_moves_in_graph_without_box(level, &b, box_index, pull_mode);
+    }
+
+    /// Like `mark_box_moves_in_graph`, assuming `b` already has `BOX` cleared at `box_index`.
+    pub fn mark_box_moves_in_graph_without_box(
+        &mut self,
+        level: &Level,
+        b: &Board,
+        box_index: usize,
+        pull_mode: bool,
+    ) {
+        self.reset_for_box_moves();
 
         let (box_y, box_x) = level.coord(box_index);
-        debug_assert!(b.cell(box_y, box_x) & BOX != 0);
-
-        b.and_not(box_y, box_x, BOX);
-        self.shift_blocks.compute(level, &b);
+        debug_assert!(b.cell(box_y, box_x) & BOX == 0);
+        self.shift_blocks.compute(level, b);
 
         self.current_scratch.clear();
         self.next_scratch.clear();
@@ -608,31 +638,27 @@ impl Graph {
                     && b.get(next_sok_y, next_sok_x) & OCCUPIED == 0
                     && next_sok_y >= 0
                     && next_sok_x >= 0
-                    && let Some(sok_idx) =
-                        level.index_at(next_sok_y as usize, next_sok_x as usize)
+                    && let Some(sok_idx) = level.index_at(next_sok_y as usize, next_sok_x as usize)
                 {
                     let from_block = edge_block[sok_idx * 4 + ((direction + 2) & 3)];
                     for (dir, slot) in has_sokoban.iter_mut().enumerate() {
                         if dir == direction {
                             *slot = b.in_bounds(next_sok_y as usize, next_sok_x as usize);
                         } else if from_block != 0
-                            && let Some(nbr) = neighbor_index(level, &b, next_box_index, dir)
+                            && let Some(nbr) = neighbor_index(level, b, next_box_index, dir)
                         {
                             *slot = edge_block[nbr * 4 + ((dir + 2) & 3)] == from_block;
                         }
                     }
                 } else {
-                    let mut tmp = b;
-                    tmp.clear_sokoban_inplace();
-                    tmp.or(next_box_y, next_box_x, BOX);
+                    self.tmp_board.copy_without_sokoban_from(b);
+                    self.tmp_board.or(next_box_y, next_box_x, BOX);
                     if next_sok_y >= 0 && next_sok_x >= 0 {
-                        tmp.expand_sokoban_cloud_from(
-                            next_sok_y as usize,
-                            next_sok_x as usize,
-                        );
+                        self.tmp_board
+                            .expand_sokoban_cloud_from(next_sok_y as usize, next_sok_x as usize);
                     }
                     for (dir, slot) in has_sokoban.iter_mut().enumerate() {
-                        *slot = tmp.at_dir(next_box_y, next_box_x, dir) & SOKOBAN != 0;
+                        *slot = self.tmp_board.at_dir(next_box_y, next_box_x, dir) & SOKOBAN != 0;
                     }
                 }
 
@@ -673,6 +699,26 @@ impl Graph {
         box_index: usize,
         pull_mode: bool,
     ) {
+        let (box_y, box_x) = level.coord(box_index);
+        debug_assert!(board.cell(box_y, box_x) & BOX != 0);
+        for vertex in &mut self.vertices {
+            vertex.reversible = false;
+        }
+        let mut b = Board::new(board.width(), board.height()).expect("dims");
+        b.copy_active_from(board);
+        b.and_not(box_y, box_x, BOX);
+        self.find_reversible_moves_without_box(level, &b, box_index, pull_mode);
+    }
+
+    /// Like `find_reversible_moves`, assuming `b` already has `BOX` cleared at `box_index`
+    /// and `vertices[*].reversible` is already `false` (from `mark_box_moves_in_graph_without_box`).
+    pub fn find_reversible_moves_without_box(
+        &mut self,
+        level: &Level,
+        b: &Board,
+        box_index: usize,
+        pull_mode: bool,
+    ) {
         let n = self.vertices_num;
         self.visited_scratch.clear();
         self.visited_scratch.resize(n, false);
@@ -684,13 +730,7 @@ impl Graph {
         let next = &mut self.next_scratch;
 
         let (box_y, box_x) = level.coord(box_index);
-        debug_assert!(board.cell(box_y, box_x) & BOX != 0);
-        let mut b = *board;
-        b.and_not(box_y, box_x, BOX);
-
-        for vertex in &mut self.vertices {
-            vertex.reversible = false;
-        }
+        debug_assert!(b.cell(box_y, box_x) & BOX == 0);
 
         for dir in 0..4 {
             let y = box_y as isize + DELTA_Y[dir];
@@ -768,6 +808,158 @@ impl Graph {
         }
     }
 
+    pub fn prepare_impossible_for_board(
+        &mut self,
+        level: &Level,
+        board_in: &Board,
+        pull_mode: bool,
+        possible_board: &Board,
+        impossible_place: &[bool],
+    ) {
+        self.dirty_len = 0;
+        self.current_impossible.zero();
+
+        let b_cells = board_in.cells();
+        let possible_cells = possible_board.cells();
+
+        if pull_mode {
+            let out_cells = self.current_impossible.cells_mut();
+            for (i, &(y, x)) in level.coords.iter().enumerate() {
+                let flat = y as usize * MAX_SIZE + x as usize;
+                if impossible_place.get(i).copied().unwrap_or(false)
+                    || b_cells[flat] == WALL
+                    || possible_cells[flat] == 0
+                {
+                    out_cells[flat] = 1;
+                }
+            }
+            return;
+        }
+
+        self.static_impossible.zero();
+        mark_deadlock_2x2(board_in, &mut self.blocked_scratch);
+
+        let blocked_cells = self.blocked_scratch.cells();
+        let static_cells = self.static_impossible.cells_mut();
+        let out_cells = self.current_impossible.cells_mut();
+
+        for (i, &(y, x)) in level.coords.iter().enumerate() {
+            let flat = y as usize * MAX_SIZE + x as usize;
+            let s_imp = impossible_place.get(i).copied().unwrap_or(false)
+                || b_cells[flat] == WALL
+                || possible_cells[flat] == 0;
+            if s_imp {
+                static_cells[flat] = 1;
+            }
+            if s_imp || blocked_cells[flat] != 0 {
+                out_cells[flat] = 1;
+            }
+        }
+        self.base_impossible
+            .copy_active_from(&self.current_impossible);
+    }
+
+    pub fn update_current_impossible_for_removed_box(
+        &mut self,
+        level: &Level,
+        board_without_box: &Board,
+        box_y: usize,
+        box_x: usize,
+    ) {
+        let base_cells = self.base_impossible.cells();
+        let static_cells = self.static_impossible.cells();
+        let out_cells = self.current_impossible.cells_mut();
+
+        for &flat in &self.dirty_cells[..self.dirty_len as usize] {
+            out_cells[flat as usize] = base_cells[flat as usize];
+        }
+        self.dirty_len = 0;
+
+        let height = board_without_box.height();
+        let width = board_without_box.width();
+        if height < 2 || width < 2 {
+            return;
+        }
+
+        let i_min = box_y.saturating_sub(2);
+        let i_max = (box_y + 1).min(height - 2);
+        let j_min = box_x.saturating_sub(2);
+        let j_max = (box_x + 1).min(width - 2);
+
+        let cells = board_without_box.cells();
+        let mut local_blocked = [0u8; 25];
+
+        for i in i_min..=i_max {
+            let r0 = i * MAX_SIZE;
+            let r1 = (i + 1) * MAX_SIZE;
+            let ly = (i - i_min) * 5;
+            for j in j_min..=j_max {
+                let lx = j - j_min;
+                let c00 = cells[r0 + j] & !SOKOBAN;
+                let c01 = cells[r0 + j + 1] & !SOKOBAN;
+                let c10 = cells[r1 + j] & !SOKOBAN;
+                let c11 = cells[r1 + j + 1] & !SOKOBAN;
+
+                let sum = u32::from(c00 & OCCUPIED != 0)
+                    + u32::from(c01 & OCCUPIED != 0)
+                    + u32::from(c10 & OCCUPIED != 0)
+                    + u32::from(c11 & OCCUPIED != 0);
+                let stuck = u32::from(c00 != WALL && c00 & TARGET == 0)
+                    + u32::from(c01 != WALL && c01 & TARGET == 0)
+                    + u32::from(c10 != WALL && c10 & TARGET == 0)
+                    + u32::from(c11 != WALL && c11 & TARGET == 0);
+
+                if sum == 3 && stuck != 0 {
+                    local_blocked[ly + lx] = 1;
+                    local_blocked[ly + lx + 1] = 1;
+                    local_blocked[ly + 5 + lx] = 1;
+                    local_blocked[ly + 5 + lx + 1] = 1;
+                }
+
+                if c00 == WALL && c11 == WALL {
+                    if c01 == 0 {
+                        local_blocked[ly + lx + 1] = 1;
+                    }
+                    if c10 == 0 {
+                        local_blocked[ly + 5 + lx] = 1;
+                    }
+                }
+
+                if c01 == WALL && c10 == WALL {
+                    if c00 == 0 {
+                        local_blocked[ly + lx] = 1;
+                    }
+                    if c11 == 0 {
+                        local_blocked[ly + 5 + lx + 1] = 1;
+                    }
+                }
+            }
+        }
+
+        let r_min = box_y.saturating_sub(1);
+        let r_max = (box_y + 1).min(height - 1);
+        let c_min = box_x.saturating_sub(1);
+        let c_max = (box_x + 1).min(width - 1);
+
+        for r in r_min..=r_max {
+            let row = r * MAX_SIZE;
+            let ly = (r - i_min) * 5;
+            for c in c_min..=c_max {
+                if level.index_at(r, c).is_none() {
+                    continue;
+                }
+                let flat = row + c;
+                let new_val =
+                    u8::from(static_cells[flat] != 0 || local_blocked[ly + (c - j_min)] != 0);
+                if out_cells[flat] != new_val {
+                    out_cells[flat] = new_val;
+                    self.dirty_cells[self.dirty_len as usize] = flat as u16;
+                    self.dirty_len += 1;
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_current_impossible(
         &mut self,
@@ -782,7 +974,8 @@ impl Graph {
         self.current_impossible.zero();
 
         if !pull_mode {
-            let mut without_box = *board_in;
+            let mut without_box = Board::new(board_in.width(), board_in.height()).expect("dims");
+            without_box.copy_active_from(board_in);
             without_box.and_not(box_y, box_x, BOX);
             mark_deadlock_2x2(&without_box, &mut self.blocked_scratch);
         }
@@ -1107,8 +1300,7 @@ mod tests {
         pull_mode: bool,
     ) {
         let mut b = *board_in;
-        graph.clear_shift();
-        graph.set_weights_infinity();
+        graph.reset_for_box_moves();
         let (box_y, box_x) = level.coord(box_index);
         let mut current = Vec::new();
         let mut next = Vec::new();
@@ -1149,7 +1341,9 @@ mod tests {
                     continue;
                 }
                 let (next_by, next_bx) = (next_by as usize, next_bx as usize);
-                if !b.in_bounds(next_by, next_bx) || graph.current_impossible.cell(next_by, next_bx) != 0 {
+                if !b.in_bounds(next_by, next_bx)
+                    || graph.current_impossible.cell(next_by, next_bx) != 0
+                {
                     continue;
                 }
                 let Some(next_box_idx) = level.index_at(next_by, next_bx) else {
@@ -1248,6 +1442,21 @@ mod tests {
             let (by, bx) = level.coord(chosen);
 
             for pull_mode in [false, true] {
+                g_fast.prepare_impossible_for_board(&level, &b, pull_mode, &possible, &imp);
+                for &bidx in &box_indices {
+                    let (iy, ix) = level.coord(bidx);
+                    if !pull_mode {
+                        let mut wb = b;
+                        wb.and_not(iy, ix, BOX);
+                        g_fast.update_current_impossible_for_removed_box(&level, &wb, iy, ix);
+                    }
+                    g_ref.set_current_impossible(&level, &b, iy, ix, pull_mode, &possible, &imp);
+                    assert_eq!(
+                        g_fast.current_impossible, g_ref.current_impossible,
+                        "impossible mismatch box={bidx} pull={pull_mode}"
+                    );
+                }
+
                 g_fast.set_current_impossible(&level, &b, by, bx, pull_mode, &possible, &imp);
                 g_ref.current_impossible = g_fast.current_impossible;
 
@@ -1260,10 +1469,16 @@ mod tests {
                 for v in 0..g_fast.vertices_num {
                     let vf = g_fast.vertices[v];
                     let vr = g_ref.vertices[v];
-                    assert_eq!(vf.weight, vr.weight, "weight mismatch v={v} pull={pull_mode}");
+                    assert_eq!(
+                        vf.weight, vr.weight,
+                        "weight mismatch v={v} pull={pull_mode}"
+                    );
                     assert_eq!(vf.src, vr.src, "src mismatch v={v} pull={pull_mode}");
                     assert_eq!(vf.shift, vr.shift, "shift mismatch v={v} pull={pull_mode}");
-                    assert_eq!(vf.reversible, vr.reversible, "rev mismatch v={v} pull={pull_mode}");
+                    assert_eq!(
+                        vf.reversible, vr.reversible,
+                        "rev mismatch v={v} pull={pull_mode}"
+                    );
                 }
             }
         }

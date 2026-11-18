@@ -12,6 +12,15 @@ fn low_get(low: &[u32], y: isize, x: isize) -> u32 {
     low[Board::flat_index(y as usize, x as usize)]
 }
 
+#[inline]
+fn mark_cycle(on_cycle: &mut [u8], y: usize, x: usize, cycle_cells: &mut usize) {
+    let idx = Board::flat_index(y, x);
+    if on_cycle[idx] == 0 {
+        on_cycle[idx] = 1;
+        *cycle_cells += 1;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn biconnect_dfs(
     b: &Board,
@@ -19,12 +28,14 @@ fn biconnect_dfs(
     x: usize,
     father: i32,
     d: u32,
-    visited: &mut Board,
+    visited: &mut [u8],
     low: &mut [u32],
-    on_cycle: &mut Board,
+    on_cycle: &mut [u8],
+    cycle_cells: &mut usize,
 ) {
-    visited.set(y, x, 1);
-    low[Board::flat_index(y, x)] = d;
+    let cur_idx = Board::flat_index(y, x);
+    visited[cur_idx] = 1;
+    low[cur_idx] = d;
 
     for dir in 0..4 {
         let ny = y as isize + DELTA_Y[dir];
@@ -36,7 +47,7 @@ fn biconnect_dfs(
             continue;
         }
         let (ny, nx) = (ny as usize, nx as usize);
-        if !b.in_bounds(ny, nx) || visited.cell(ny, nx) != 0 {
+        if !b.in_bounds(ny, nx) || visited[Board::flat_index(ny, nx)] != 0 {
             continue;
         }
         biconnect_dfs(
@@ -48,6 +59,7 @@ fn biconnect_dfs(
             visited,
             low,
             on_cycle,
+            cycle_cells,
         );
     }
 
@@ -58,51 +70,60 @@ fn biconnect_dfs(
         let ny = y as isize + DELTA_Y[dir];
         let nx = x as isize + DELTA_X[dir];
         let neighbor_low = low_get(low, ny, nx);
-        if neighbor_low < low[Board::flat_index(y, x)] {
-            low[Board::flat_index(y, x)] = neighbor_low;
+        if neighbor_low < low[cur_idx] {
+            low[cur_idx] = neighbor_low;
         }
         if neighbor_low < d && ny >= 0 && nx >= 0 {
-            on_cycle.or(ny as usize, nx as usize, 1);
+            let (ny, nx) = (ny as usize, nx as usize);
+            if b.in_bounds(ny, nx) {
+                mark_cycle(on_cycle, ny, nx, cycle_cells);
+            }
         }
     }
 
-    if low[Board::flat_index(y, x)] < d {
-        on_cycle.set(y, x, 1);
+    if low[cur_idx] < d {
+        mark_cycle(on_cycle, y, x, cycle_cells);
     }
 }
 
-pub fn biconnect_score(level: &Level, board_in: &Board) -> usize {
-    let b = *board_in;
-    let mut visited = Board::new(b.width(), b.height()).expect("same dims");
-    let mut on_cycle = Board::new(b.width(), b.height()).expect("same dims");
-    let mut low = vec![INF; MAX_INNER];
+pub fn biconnect_score(level: &Level, b: &Board) -> usize {
+    let mut visited = [0u8; MAX_INNER];
+    let mut on_cycle = [0u8; MAX_INNER];
+    let mut low = [INF; MAX_INNER];
+    let mut cycle_cells = 0usize;
 
-    for y in 0..b.height() {
-        for x in 0..b.width() {
-            if !level.is_inner(y, x) {
-                continue;
-            }
-            if visited.cell(y, x) != 0 || b.cell(y, x) & OCCUPIED != 0 {
-                continue;
-            }
-            biconnect_dfs(&b, y, x, -1, 0, &mut visited, &mut low, &mut on_cycle);
+    for &(y, x) in &level.coords {
+        let (y, x) = (y as usize, x as usize);
+        if !b.in_bounds(y, x) {
+            continue;
         }
+        let idx = Board::flat_index(y, x);
+        if visited[idx] != 0 || b.cells()[idx] & OCCUPIED != 0 {
+            continue;
+        }
+        biconnect_dfs(
+            b,
+            y,
+            x,
+            -1,
+            0,
+            &mut visited,
+            &mut low,
+            &mut on_cycle,
+            &mut cycle_cells,
+        );
     }
 
     for y in 0..b.height() {
+        let row = y * MAX_SIZE;
         for x in 0..b.width() {
-            if b.cell(y, x) & TARGET != 0 && b.cell(y, x) & BOX == 0 {
-                on_cycle.set(y, x, 1);
+            let cell = b.cells()[row + x];
+            if cell & (TARGET | BOX) == TARGET {
+                mark_cycle(&mut on_cycle, y, x, &mut cycle_cells);
             }
         }
     }
 
-    let cycle_cells = on_cycle
-        .cells()
-        .iter()
-        .take(MAX_INNER)
-        .filter(|cell| **cell != 0)
-        .count();
     level.index_num() - level.box_count - cycle_cells
 }
 

@@ -15,7 +15,7 @@ use crate::deadlock::fixed_boxes::turn_fixed_boxes_into_walls;
 use crate::deadlock::oracle::move_is_deadlocked;
 use crate::deadlock::state::DeadlockState;
 use crate::error::{Result, SolveError};
-use crate::moves::{Move, apply_move, find_possible_moves};
+use crate::moves::{Move, find_possible_moves};
 use crate::search::helper::Helper;
 use crate::search::packing::{compute_start_zones, put_sokoban_in_zone};
 use crate::search::perimeter::Perimeter;
@@ -313,14 +313,14 @@ impl Dragonfly {
         };
         let (y, x) = ctx.level.coord(last_move);
 
+        let mut child = Board::new(board.width(), board.height()).expect("dims");
         for (i, mv) in moves.iter().enumerate() {
             if mv.from as usize == last_move {
                 possible[i] = false; // another macro move will deal with it
                 continue;
             }
 
-            let mut child = *board;
-            apply_move(&mut child, mv, SearchMode::Normal, &ctx.level);
+            crate::moves::apply_move_into(board, &mut child, mv, SearchMode::Normal, &ctx.level);
 
             if child.is_solved(true, &ctx.level.initial, ctx.level.initial_sokoban) {
                 continue;
@@ -397,9 +397,9 @@ impl Dragonfly {
         self.packed_scratch.clear();
         self.hashes_scratch.reserve(moves.len());
         self.packed_scratch.reserve(moves.len());
+        let mut child = Board::new(board.width(), board.height())?;
         for mv in &moves {
-            let mut child = board;
-            apply_move(&mut child, mv, SearchMode::Normal, &ctx.level);
+            crate::moves::apply_move_into(&board, &mut child, mv, SearchMode::Normal, &ctx.level);
             self.hashes_scratch.push(child.hash());
             self.packed_scratch
                 .push(child.boxes_on_bases(&ctx.level.initial) as u16);

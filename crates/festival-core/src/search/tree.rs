@@ -7,7 +7,7 @@
 use crate::board::Board;
 use crate::constants::*;
 use crate::error::{Result, SolveError};
-use crate::moves::{Move, MoveAttr, apply_move, attr_to_weight};
+use crate::moves::{Move, MoveAttr, attr_to_weight};
 use crate::planning::imagine as imagine_planning;
 use crate::search::advisors::{AdvisorsElement, is_an_advisor, set_advisors_inner};
 use crate::search::helper::Helper;
@@ -256,12 +256,7 @@ impl Tree {
         self.probe_hash_slot(hash).1
     }
 
-    fn add_node_at_slot(
-        &mut self,
-        slot: usize,
-        hash: u64,
-        score: ScoreElement,
-    ) -> Result<NodeId> {
+    fn add_node_at_slot(&mut self, slot: usize, hash: u64, score: ScoreElement) -> Result<NodeId> {
         debug_assert_eq!(self.hash_array[slot], NONE_NODE);
         if self.nodes.len() >= self.max_nodes {
             return Err(SolveError::ResourceExhausted);
@@ -425,9 +420,9 @@ impl Tree {
             return Err(SolveError::ResourceExhausted);
         }
 
+        let mut child = Board::new(board.width(), board.height())?;
         for mv in moves {
-            let mut child = board;
-            apply_move(&mut child, &mv, self.search_mode, &ctx.level);
+            crate::moves::apply_move_into(&board, &mut child, &mv, self.search_mode, &ctx.level);
             let hash = child.hash();
             let node = match self.probe_hash_slot(hash) {
                 (_, Some(existing)) => existing,
@@ -526,13 +521,30 @@ impl Tree {
         if e.depth == 0 {
             return false;
         }
-        match self.board_at(e.board_offset) {
-            Ok(board) => board.is_solved(
-                self.pull_mode,
-                &ctx.level.initial,
-                ctx.level.initial_sokoban,
-            ),
-            Err(_) => false,
+        let offset = e.board_offset;
+        let end = offset + self.board_stride;
+        if end > self.boards.len() {
+            return false;
+        }
+        let bytes = &self.boards[offset..end];
+        if self.pull_mode {
+            let (sy, sx) = ctx.level.initial_sokoban;
+            if sy >= self.height || sx >= self.width || bytes[sy * self.width + sx] & SOKOBAN == 0 {
+                return false;
+            }
+            let init_cells = ctx.level.initial.cells();
+            for y in 0..self.height {
+                let b_row = y * self.width;
+                let i_row = y * MAX_SIZE;
+                for x in 0..self.width {
+                    if bytes[b_row + x] & BOX != 0 && init_cells[i_row + x] & BOX == 0 {
+                        return false;
+                    }
+                }
+            }
+            true
+        } else {
+            bytes.iter().all(|&cell| cell & (BOX | TARGET) != BOX)
         }
     }
 
@@ -928,8 +940,9 @@ impl Tree {
         }
 
         let parent_board = self.board_at(self.expansions[parent as usize].board_offset)?;
-        let mut board = parent_board;
-        apply_move(
+        let mut board = Board::new(self.width, self.height)?;
+        crate::moves::apply_move_into(
+            &parent_board,
             &mut board,
             &move_hash.move_data,
             self.search_mode,

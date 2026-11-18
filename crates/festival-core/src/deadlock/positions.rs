@@ -91,7 +91,12 @@ impl PositionSet {
         self.unique_moves_est = 0;
     }
 
-    fn alloc_position(&mut self, board: Board, pull_mode: bool, search_mode: SearchMode) -> Position {
+    fn alloc_position(
+        &mut self,
+        board: Board,
+        pull_mode: bool,
+        search_mode: SearchMode,
+    ) -> Position {
         if let Some(mut p) = self.spare_positions.pop() {
             p.moves.clear();
             p.scores.clear();
@@ -165,9 +170,12 @@ impl PositionSet {
     ) {
         hashes.clear();
         scores.clear();
+        if moves.is_empty() {
+            return;
+        }
+        let mut c = Board::new(board.width(), board.height()).expect("dims");
         for mv in moves {
-            let mut c = *board;
-            apply_move(&mut c, mv, search_mode, &ctx.level);
+            crate::moves::apply_move_into(board, &mut c, mv, search_mode, &ctx.level);
             hashes.push(c.hash());
             scores.push(score_board(ctx, helper, &c, pull_mode, search_mode));
         }

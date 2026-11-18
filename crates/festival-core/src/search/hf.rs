@@ -315,16 +315,16 @@ fn can_be_pushed_to_direction(
     true
 }
 
-/// Port of `get_rev_hotspots`.
-fn get_rev_hotspots(ctx: &LevelContext, board: &Board) -> Board {
+/// Port of `get_rev_hotspots`, returning `(hotspots_board, count)`.
+fn get_rev_hotspots(ctx: &LevelContext, board: &Board) -> (Board, usize) {
     let mut hs = Board::new(board.width(), board.height()).expect("same dims");
+    let mut count = 0usize;
 
     for y in 0..board.height() {
+        let row = y * MAX_SIZE;
         for x in 0..board.width() {
-            if board.cell(y, x) & BOX == 0 {
-                continue;
-            }
-            if board.cell(y, x) & TARGET != 0 {
+            let cell = board.cells()[row + x];
+            if cell & (BOX | TARGET) != BOX {
                 continue;
             }
             let mut pushable = false;
@@ -336,39 +336,39 @@ fn get_rev_hotspots(ctx: &LevelContext, board: &Board) -> Board {
             }
             if !pushable {
                 hs.set(y, x, 1);
+                count += 1;
             }
         }
     }
-    hs
-}
-
-fn rev_hotspots(ctx: &LevelContext, board: &Board) -> i32 {
-    let hs = get_rev_hotspots(ctx, board);
-    hs.cells()
-        .iter()
-        .take(MAX_INNER)
-        .filter(|value| **value != 0)
-        .count() as i32
+    (hs, count)
 }
 
 /// Port of `rev_hotspots_distance`.
-fn rev_hotspots_distance(ctx: &LevelContext, helper: &Helper, board: &Board) -> i32 {
-    let mut hs = get_rev_hotspots(ctx, board);
-
-    if hs.cells().iter().take(MAX_INNER).all(|value| *value == 0) {
+fn rev_hotspots_distance_from(
+    ctx: &LevelContext,
+    helper: &Helper,
+    board: &Board,
+    mut hs: Board,
+    hs_count: usize,
+) -> i32 {
+    if hs_count == 0 {
         return get_scored_distance(helper, board);
     }
 
-    let mut b2 = ctx.level.initial;
-    b2.clear_boxes_inplace();
+    let b2 = ctx.level.initial.without_boxes();
     let mut dist = [INF; MAX_INNER];
     crate::bfs::expand_group(&ctx.level, &b2, &mut hs, &mut dist);
 
     let mut sum = 0;
+    let width = board.width();
     for y in 0..board.height() {
-        for x in 0..board.width() {
-            if board.cell(y, x) & BOX != 0 {
-                sum += dist[Board::flat_index(y, x)] as i32;
+        let row = y * MAX_SIZE;
+        for (&cell, &d) in board.cells()[row..row + width]
+            .iter()
+            .zip(&dist[row..row + width])
+        {
+            if cell & BOX != 0 {
+                sum += d as i32;
             }
         }
     }
@@ -385,8 +385,9 @@ pub fn set_score_in_rev_mode(
 ) {
     if !pull_mode {
         score.rooms_score = ctx.rooms.score(&ctx.level, board) as i16;
-        score.hotspots = rev_hotspots(ctx, board) as i16;
-        score.dist_to_targets = rev_hotspots_distance(ctx, helper, board);
+        let (hs, hs_count) = get_rev_hotspots(ctx, board);
+        score.hotspots = hs_count as i16;
+        score.dist_to_targets = rev_hotspots_distance_from(ctx, helper, board, hs, hs_count);
         return;
     }
 

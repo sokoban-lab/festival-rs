@@ -3,163 +3,246 @@
 use crate::board::Board;
 use crate::constants::*;
 
-fn same_board(a: &Board, b: &Board) -> bool {
-    if a.width() != b.width() || a.height() != b.height() {
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DiagSpan {
+    pub y: u8,
+    pub x: u8,
+    pub len: u8,
+    pub right: bool,
+}
+
+#[inline]
+fn inner_get(inner: &[u8; MAX_INNER], width: usize, height: usize, y: isize, x: isize) -> u8 {
+    if y < 0 || x < 0 {
+        return 0;
+    }
+    let (yu, xu) = (y as usize, x as usize);
+    if yu >= height || xu >= width {
+        return 0;
+    }
+    inner[yu * MAX_SIZE + xu]
+}
+
+fn mark_inner_cavities(board: &Board, inner: &mut [u8; MAX_INNER]) -> bool {
+    let height = board.height();
+    let width = board.width();
+    if height < 3 || width < 3 {
         return false;
     }
-    for y in 0..a.height() {
-        for x in 0..a.width() {
-            if a.cell(y, x) != b.cell(y, x) {
-                return false;
+    let cells = board.cells();
+    let mut found = false;
+    for y in 1..height - 1 {
+        let row = y * MAX_SIZE;
+        let up_row = (y - 1) * MAX_SIZE;
+        let dn_row = (y + 1) * MAX_SIZE;
+        for x in 1..width - 1 {
+            if cells[row + x] & (OCCUPIED | SOKOBAN) != 0 {
+                continue;
+            }
+            if cells[up_row + x] & OCCUPIED == 0
+                || cells[row + x + 1] & OCCUPIED == 0
+                || cells[dn_row + x] & OCCUPIED == 0
+                || cells[row + x - 1] & OCCUPIED == 0
+            {
+                continue;
+            }
+            if !found {
+                inner[..height * MAX_SIZE].fill(0);
+                found = true;
+            }
+            inner[row + x] = 1;
+        }
+    }
+    found
+}
+
+#[inline]
+fn check_right_diag_at(
+    board: &Board,
+    inner: &[u8; MAX_INNER],
+    width: usize,
+    height: usize,
+    y: usize,
+    x: usize,
+) -> Option<usize> {
+    let start = board.get(y as isize - 1, x as isize - 1) & OCCUPIED != 0
+        || (board.get(y as isize - 1, x as isize) == WALL
+            && board.get(y as isize, x as isize - 1) == WALL);
+    if !start {
+        return None;
+    }
+
+    let mut k = 1usize;
+    while inner_get(inner, width, height, (y + k) as isize, (x + k) as isize) != 0 {
+        k += 1;
+    }
+
+    let end = board.get((y + k) as isize, (x + k) as isize) & OCCUPIED != 0
+        || (board.get((y + k - 1) as isize, (x + k) as isize) == WALL
+            && board.get((y + k) as isize, (x + k - 1) as isize) == WALL);
+    end.then_some(k)
+}
+
+#[inline]
+fn check_left_diag_at(
+    board: &Board,
+    inner: &[u8; MAX_INNER],
+    width: usize,
+    height: usize,
+    y: usize,
+    x: usize,
+) -> Option<usize> {
+    let start = board.get(y as isize - 1, x as isize + 1) & OCCUPIED != 0
+        || (board.get(y as isize - 1, x as isize) == WALL
+            && board.get(y as isize, x as isize + 1) == WALL);
+    if !start {
+        return None;
+    }
+
+    let mut k = 1usize;
+    while inner_get(
+        inner,
+        width,
+        height,
+        (y + k) as isize,
+        x as isize - k as isize,
+    ) != 0
+    {
+        k += 1;
+    }
+    let left = x as isize - k as isize;
+
+    let end = board.get((y + k) as isize, left) & OCCUPIED != 0
+        || (board.get((y + k - 1) as isize, left) == WALL
+            && board.get((y + k) as isize, left + 1) == WALL);
+    end.then_some(k)
+}
+
+pub(crate) fn collect_diags(board: &Board, out: &mut [DiagSpan; MAX_INNER]) -> usize {
+    let mut inner = [0u8; MAX_INNER];
+    if !mark_inner_cavities(board, &mut inner) {
+        return 0;
+    }
+
+    let height = board.height();
+    let width = board.width();
+    let mut count = 0usize;
+
+    for y in 1..height - 1 {
+        let row = y * MAX_SIZE;
+        for x in 1..width - 1 {
+            if inner[row + x] == 0 {
+                continue;
+            }
+            if let Some(k) = check_right_diag_at(board, &inner, width, height, y, x) {
+                out[count] = DiagSpan {
+                    y: y as u8,
+                    x: x as u8,
+                    len: k as u8,
+                    right: true,
+                };
+                count += 1;
+            }
+            if let Some(k) = check_left_diag_at(board, &inner, width, height, y, x) {
+                out[count] = DiagSpan {
+                    y: y as u8,
+                    x: x as u8,
+                    len: k as u8,
+                    right: false,
+                };
+                count += 1;
             }
         }
     }
-    true
+    count
 }
 
 pub fn mark_diags(board: &Board) -> (Board, Board) {
-    let mut inner = Board::new(board.width(), board.height()).expect("same dims");
     let mut diag_right = Board::new(board.width(), board.height()).expect("same dims");
     let mut diag_left = Board::new(board.width(), board.height()).expect("same dims");
-
-    for y in 1..board.height().saturating_sub(1) {
-        for x in 1..board.width().saturating_sub(1) {
-            if board.cell(y, x) & OCCUPIED != 0 || board.cell(y, x) & SOKOBAN != 0 {
-                continue;
-            }
-            if board.at_dir(y, x, 0) & OCCUPIED == 0
-                || board.at_dir(y, x, 1) & OCCUPIED == 0
-                || board.at_dir(y, x, 2) & OCCUPIED == 0
-                || board.at_dir(y, x, 3) & OCCUPIED == 0
-            {
-                continue;
-            }
-            inner.set(y, x, 1);
+    let mut spans = [DiagSpan::default(); MAX_INNER];
+    let count = collect_diags(board, &mut spans);
+    for span in &spans[..count] {
+        if span.right {
+            diag_right.set(span.y as usize, span.x as usize, span.len);
+        } else {
+            diag_left.set(span.y as usize, span.x as usize, span.len);
         }
     }
-
-    for y in 1..board.height().saturating_sub(1) {
-        for x in 1..board.width().saturating_sub(1) {
-            if inner.cell(y, x) == 0 {
-                continue;
-            }
-            let mut start = false;
-            if board.get(y as isize - 1, x as isize - 1) & OCCUPIED != 0 {
-                start = true;
-            }
-            if board.get(y as isize - 1, x as isize) == WALL
-                && board.get(y as isize, x as isize - 1) == WALL
-            {
-                start = true;
-            }
-            if !start {
-                continue;
-            }
-
-            let mut k = 1;
-            while inner.get((y + k) as isize, (x + k) as isize) != 0 {
-                k += 1;
-            }
-
-            let mut end = false;
-            if board.get((y + k) as isize, (x + k) as isize) & OCCUPIED != 0 {
-                end = true;
-            }
-            if board.get((y + k - 1) as isize, (x + k) as isize) == WALL
-                && board.get((y + k) as isize, (x + k - 1) as isize) == WALL
-            {
-                end = true;
-            }
-            if !end {
-                continue;
-            }
-            diag_right.set(y, x, k as u8);
-        }
-    }
-
-    for y in 1..board.height().saturating_sub(1) {
-        for x in 1..board.width().saturating_sub(1) {
-            if inner.cell(y, x) == 0 {
-                continue;
-            }
-            let mut start = false;
-            if board.get(y as isize - 1, x as isize + 1) & OCCUPIED != 0 {
-                start = true;
-            }
-            if board.get(y as isize - 1, x as isize) == WALL
-                && board.get(y as isize, x as isize + 1) == WALL
-            {
-                start = true;
-            }
-            if !start {
-                continue;
-            }
-
-            let mut k = 1;
-            while inner.get((y + k) as isize, (x as isize) - k as isize) != 0 {
-                k += 1;
-            }
-            let left = x as isize - k as isize;
-
-            let mut end = false;
-            if board.get((y + k) as isize, left) & OCCUPIED != 0 {
-                end = true;
-            }
-            if board.get((y + k - 1) as isize, left) == WALL
-                && board.get((y + k) as isize, left + 1) == WALL
-            {
-                end = true;
-            }
-            if !end {
-                continue;
-            }
-            diag_left.set(y, x, k as u8);
-        }
-    }
-
     (diag_right, diag_left)
 }
 
-fn set_wall(board: &mut Board, y: isize, x: isize) {
-    if y >= 0 && x >= 0 && board.in_bounds(y as usize, x as usize) {
-        board.set(y as usize, x as usize, WALL);
-    }
-}
-
-fn wallify_diag_void(board: &mut Board, y: usize, x: usize, k: usize, diag_right: bool) {
-    if diag_right {
-        for n in 0..k {
-            set_wall(board, (y + n) as isize, x as isize + n as isize - 1);
-            set_wall(board, (y + n) as isize, x as isize + n as isize + 1);
+#[inline]
+fn set_wall_track(board: &mut Board, y: isize, x: isize, changed: &mut bool) {
+    if y >= 0 && x >= 0 {
+        let (yu, xu) = (y as usize, x as usize);
+        if board.in_bounds(yu, xu) && board.cell(yu, xu) != WALL {
+            board.set(yu, xu, WALL);
+            *changed = true;
         }
-        if board.get(y as isize - 1, x as isize - 1) & OCCUPIED != 0 {
-            set_wall(board, y as isize - 1, x as isize - 1);
-        }
-        set_wall(board, y as isize - 1, x as isize);
-        if board.get((y + k) as isize, (x + k) as isize) & OCCUPIED != 0 {
-            set_wall(board, (y + k) as isize, (x + k) as isize);
-        }
-        set_wall(board, (y + k) as isize, (x + k) as isize - 1);
-    } else {
-        for n in 0..k {
-            set_wall(board, (y + n) as isize, x as isize - n as isize - 1);
-            set_wall(board, (y + n) as isize, x as isize - n as isize + 1);
-        }
-        if board.get(y as isize - 1, x as isize + 1) & OCCUPIED != 0 {
-            set_wall(board, y as isize - 1, x as isize + 1);
-        }
-        set_wall(board, y as isize - 1, x as isize);
-        if board.get((y + k) as isize, x as isize - k as isize) & OCCUPIED != 0 {
-            set_wall(board, (y + k) as isize, x as isize - k as isize);
-        }
-        set_wall(board, (y + k) as isize, x as isize - k as isize + 1);
     }
 }
 
 pub fn wallify_diag(board: &mut Board, y: usize, x: usize, k: usize, diag_right: bool) -> bool {
-    let backup = *board;
-    wallify_diag_void(board, y, x, k, diag_right);
-    !same_board(board, &backup)
+    let mut changed = false;
+    if diag_right {
+        for n in 0..k {
+            set_wall_track(
+                board,
+                (y + n) as isize,
+                x as isize + n as isize - 1,
+                &mut changed,
+            );
+            set_wall_track(
+                board,
+                (y + n) as isize,
+                x as isize + n as isize + 1,
+                &mut changed,
+            );
+        }
+        if board.get(y as isize - 1, x as isize - 1) & OCCUPIED != 0 {
+            set_wall_track(board, y as isize - 1, x as isize - 1, &mut changed);
+        }
+        set_wall_track(board, y as isize - 1, x as isize, &mut changed);
+        if board.get((y + k) as isize, (x + k) as isize) & OCCUPIED != 0 {
+            set_wall_track(board, (y + k) as isize, (x + k) as isize, &mut changed);
+        }
+        set_wall_track(board, (y + k) as isize, (x + k) as isize - 1, &mut changed);
+    } else {
+        for n in 0..k {
+            set_wall_track(
+                board,
+                (y + n) as isize,
+                x as isize - n as isize - 1,
+                &mut changed,
+            );
+            set_wall_track(
+                board,
+                (y + n) as isize,
+                x as isize - n as isize + 1,
+                &mut changed,
+            );
+        }
+        if board.get(y as isize - 1, x as isize + 1) & OCCUPIED != 0 {
+            set_wall_track(board, y as isize - 1, x as isize + 1, &mut changed);
+        }
+        set_wall_track(board, y as isize - 1, x as isize, &mut changed);
+        if board.get((y + k) as isize, x as isize - k as isize) & OCCUPIED != 0 {
+            set_wall_track(
+                board,
+                (y + k) as isize,
+                x as isize - k as isize,
+                &mut changed,
+            );
+        }
+        set_wall_track(
+            board,
+            (y + k) as isize,
+            x as isize - k as isize + 1,
+            &mut changed,
+        );
+    }
+    changed
 }
 
 pub fn diag_has_no_targets(board: &Board, y: usize, x: usize, n: usize, diag_right: bool) -> bool {
@@ -212,15 +295,27 @@ pub fn diag_deadlock(
 }
 
 pub fn is_diag_deadlock(board: &Board) -> bool {
-    let (diag_right, diag_left) = mark_diags(board);
-    for y in 0..board.height() {
-        for x in 0..board.width() {
-            let n = diag_right.cell(y, x);
-            if n != 0 && diag_deadlock(board, y, x, n as usize, 1) {
+    let mut inner = [0u8; MAX_INNER];
+    if !mark_inner_cavities(board, &mut inner) {
+        return false;
+    }
+
+    let height = board.height();
+    let width = board.width();
+    for y in 1..height - 1 {
+        let row = y * MAX_SIZE;
+        for x in 1..width - 1 {
+            if inner[row + x] == 0 {
+                continue;
+            }
+            if let Some(k) = check_right_diag_at(board, &inner, width, height, y, x)
+                && diag_deadlock(board, y, x, k, 1)
+            {
                 return true;
             }
-            let n = diag_left.cell(y, x);
-            if n != 0 && diag_deadlock(board, y, x, n as usize, -1) {
+            if let Some(k) = check_left_diag_at(board, &inner, width, height, y, x)
+                && diag_deadlock(board, y, x, k, -1)
+            {
                 return true;
             }
         }

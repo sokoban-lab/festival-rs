@@ -42,8 +42,8 @@ pub struct DeadlockPattern {
 pub struct Patterns {
     pub normal: Vec<DeadlockPattern>,
     pub pull: Vec<DeadlockPattern>,
-    pub(crate) normal_groups: Vec<PatternGroup>,
-    pub(crate) pull_groups: Vec<PatternGroup>,
+    pub(crate) normal_groups: PatternGroupSet,
+    pub(crate) pull_groups: PatternGroupSet,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +63,14 @@ pub(crate) struct PatternGroup {
     patterns: Vec<GroupPattern>,
 }
 
+pub(crate) struct PatternGroupSet {
+    pub(crate) groups: Vec<PatternGroup>,
+    min_dy: isize,
+    max_dy: isize,
+    min_dx: isize,
+    max_dx: isize,
+}
+
 static PATTERNS: OnceLock<Patterns> = OnceLock::new();
 
 pub fn patterns() -> &'static Patterns {
@@ -78,7 +86,7 @@ pub fn patterns() -> &'static Patterns {
     })
 }
 
-fn build_groups(patterns: &[DeadlockPattern]) -> Vec<PatternGroup> {
+fn build_groups(patterns: &[DeadlockPattern]) -> PatternGroupSet {
     let mut groups: Vec<PatternGroup> = Vec::new();
 
     for pattern in patterns {
@@ -137,17 +145,33 @@ fn build_groups(patterns: &[DeadlockPattern]) -> Vec<PatternGroup> {
         }
     }
 
-    groups
+    let mut min_dy = isize::MAX;
+    let mut max_dy = isize::MIN;
+    let mut min_dx = isize::MAX;
+    let mut max_dx = isize::MIN;
+    for group in &groups {
+        min_dy = min_dy.min(group.shift_y as isize - group.y as isize + 1);
+        max_dy = max_dy.max(group.shift_y as isize);
+        min_dx = min_dx.min(group.shift_x as isize - group.x as isize + 1);
+        max_dx = max_dx.max(group.shift_x as isize);
+    }
+
+    PatternGroupSet {
+        groups,
+        min_dy,
+        max_dy,
+        min_dx,
+        max_dx,
+    }
 }
 
-/// Packs a `rows`x`cols` window into five bits per cell (all tile values are
-/// below 32 once the deadlock-zone bit is cleared).
+/// Packs a `rows`x`cols` window into five bits per cell, ignoring `DEADLOCK_ZONE`.
 #[inline]
 fn pack_window(board: &Board, y: usize, x: usize, rows: usize, cols: usize) -> u128 {
     let mut window = 0u128;
     for row in 0..rows {
         for col in 0..cols {
-            let cell = board.get_u(y + row, x + col);
+            let cell = board.get_u(y + row, x + col) & !DEADLOCK_ZONE;
             debug_assert!(cell < 32);
             window |= (cell as u128) << ((row * 5 + col) * 5);
         }
@@ -159,33 +183,23 @@ fn pack_window(board: &Board, y: usize, x: usize, rows: usize, cols: usize) -> u
 fn neighbor_signature(board: &Board, y: usize, x: usize) -> u64 {
     let mut signature = 0u64;
     for dir in 0..8 {
-        let cell = board.get(y as isize + DELTA_Y_8[dir], x as isize + DELTA_X_8[dir]);
+        let cell =
+            board.get(y as isize + DELTA_Y_8[dir], x as isize + DELTA_X_8[dir]) & !DEADLOCK_ZONE;
         signature |= (cell as u64) << (dir * 5);
     }
     signature
 }
 
 pub(crate) fn groups_match(
-    groups: &[PatternGroup],
+    set: &PatternGroupSet,
     board: &Board,
     box_y: usize,
     box_x: usize,
 ) -> bool {
-    let mut min_dy = isize::MAX;
-    let mut max_dy = isize::MIN;
-    let mut min_dx = isize::MAX;
-    let mut max_dx = isize::MIN;
-    for group in groups {
-        min_dy = min_dy.min(group.shift_y as isize - group.y as isize + 1);
-        max_dy = max_dy.max(group.shift_y as isize);
-        min_dx = min_dx.min(group.shift_x as isize - group.x as isize + 1);
-        max_dx = max_dx.max(group.shift_x as isize);
-    }
-
-    let start_y = (box_y as isize + min_dy).max(0) as usize;
-    let start_x = (box_x as isize + min_dx).max(0) as usize;
-    let end_y = ((box_y as isize + max_dy + 1) as usize).min(board.height());
-    let end_x = ((box_x as isize + max_dx + 1) as usize).min(board.width());
+    let start_y = (box_y as isize + set.min_dy).max(0) as usize;
+    let start_x = (box_x as isize + set.min_dx).max(0) as usize;
+    let end_y = ((box_y as isize + set.max_dy + 1) as usize).min(board.height());
+    let end_x = ((box_x as isize + set.max_dx + 1) as usize).min(board.width());
 
     for by in start_y..end_y {
         for bx in start_x..end_x {
@@ -193,7 +207,7 @@ pub(crate) fn groups_match(
                 continue;
             }
             let signature = neighbor_signature(board, by, bx);
-            for group in groups {
+            for group in &set.groups {
                 let origin_y = by as isize - group.shift_y as isize;
                 let origin_x = bx as isize - group.shift_x as isize;
                 if origin_y < 0 || origin_x < 0 {
@@ -484,6 +498,29 @@ mod tests {
                     );
                 }
             }
+
+            let mut zoned = board;
+            for y in 0..height {
+                for x in 0..width {
+                    if (next() & 1) != 0 {
+                        zoned.or(y, x, DEADLOCK_ZONE);
+                    }
+                }
+            }
+            for y in 0..height {
+                for x in 0..width {
+                    assert_eq!(
+                        groups_match(&patterns.normal_groups, &zoned, y, x),
+                        groups_match(&patterns.normal_groups, &board, y, x),
+                        "deadlock_zone normal mismatch at ({y},{x})"
+                    );
+                    assert_eq!(
+                        groups_match(&patterns.pull_groups, &zoned, y, x),
+                        groups_match(&patterns.pull_groups, &board, y, x),
+                        "deadlock_zone pull mismatch at ({y},{x})"
+                    );
+                }
+            }
         }
     }
 
@@ -492,12 +529,14 @@ mod tests {
         let patterns = patterns();
         let grouped: usize = patterns
             .normal_groups
+            .groups
             .iter()
             .map(|group| group.patterns.len())
             .sum();
         assert_eq!(grouped, patterns.normal.len());
         let grouped: usize = patterns
             .pull_groups
+            .groups
             .iter()
             .map(|group| group.patterns.len())
             .sum();

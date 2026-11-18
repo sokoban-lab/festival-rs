@@ -133,9 +133,10 @@ pub fn find_possible_moves(
 ) -> Result<(Vec<Move>, bool)> {
     let level = &ctx.level;
 
-    let mut b = *board_in;
+    let mut b = Board::new(board_in.width(), board_in.height())?;
+    b.copy_active_from(board_in);
     b.clear_deadlock_zone_inplace();
-    let board = if pull_mode {
+    let mut board = if pull_mode {
         b
     } else {
         turn_fixed_boxes_into_walls(level, &ctx.distances, &b, &deadlock.envelopes)
@@ -173,14 +174,12 @@ pub fn find_possible_moves(
         use_corral = false;
     }
 
-    let mut has_corral = false;
-    let mut corral_options = *board_in;
-    if use_corral && !pull_mode {
-        if let Some(options) = detect_corral(level, &ctx.distances, &board) {
-            has_corral = true;
-            corral_options = options;
-        }
-    }
+    let corral_options = if use_corral && !pull_mode {
+        detect_corral(level, &ctx.distances, &board)
+    } else {
+        None
+    };
+    let has_corral = corral_options.is_some();
 
     let mut scratch = std::mem::take(&mut helper.move_scratch);
     if scratch.len() < MAX_MOVES {
@@ -194,11 +193,21 @@ pub fn find_possible_moves(
     let mut box_moves = std::mem::take(&mut helper.box_moves_scratch);
     box_moves.clear();
 
+    graph.prepare_impossible_for_board(
+        level,
+        &board,
+        pull_mode,
+        &possible,
+        ctx.distances.impossible_slice(),
+    );
+
     let result = (|| -> Result<(Vec<Move>, bool)> {
         for index in 0..level.index_num() {
             let (y, x) = level.coord(index);
 
-            if has_corral && corral_options.cell(y, x) & BOX == 0 {
+            if let Some(ref options) = corral_options
+                && options.cell(y, x) & BOX == 0
+            {
                 continue;
             }
             if search_mode == SearchMode::RevSearch
@@ -215,22 +224,18 @@ pub fn find_possible_moves(
                 continue;
             }
 
-            graph.set_current_impossible(
-                level,
-                &board,
-                y,
-                x,
-                pull_mode,
-                &possible,
-                ctx.distances.impossible_slice(),
-            );
-            graph.mark_box_moves_in_graph(level, &board, index, pull_mode);
+            board.and_not(y, x, BOX);
+            if !pull_mode {
+                graph.update_current_impossible_for_removed_box(level, &board, y, x);
+            }
+            graph.mark_box_moves_in_graph_without_box(level, &board, index, pull_mode);
             if matches!(
                 effective_mode,
                 SearchMode::Normal | SearchMode::WobblersSearch
             ) {
-                graph.find_reversible_moves(level, &board, index, pull_mode);
+                graph.find_reversible_moves_without_box(level, &board, index, pull_mode);
             }
+            board.or(y, x, BOX);
 
             let mut count = graph.get_box_moves(level, index, &mut scratch);
             for mv in scratch.iter_mut().take(count) {
@@ -293,22 +298,7 @@ pub fn find_possible_moves(
     result
 }
 
-/// Port of `apply_move`.
-pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: &Level) {
-    debug_assert_ne!(search_mode as i32, -1);
-
-    if mv.kill {
-        let (y, x) = level.coord(mv.from as usize);
-        board.and_not(y, x, BOX);
-        board.expand_sokoban_cloud();
-        if search_mode == SearchMode::DeadlockSearch {
-            update_deadlock_zone(level, board, mv.pull);
-        }
-        return;
-    }
-
-    board.clear_sokoban_inplace();
-
+fn finish_non_kill_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: &Level) {
     let (from_y, from_x) = level.coord(mv.from as usize);
     if board.cell(from_y, from_x) & BOX == 0 {
         debug_assert!(false, "apply_move: missing box");
@@ -342,6 +332,50 @@ pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: 
     if search_mode == SearchMode::DeadlockSearch {
         update_deadlock_zone(level, board, mv.pull);
     }
+}
+
+/// Port of `apply_move`.
+pub fn apply_move(board: &mut Board, mv: &Move, search_mode: SearchMode, level: &Level) {
+    debug_assert_ne!(search_mode as i32, -1);
+
+    if mv.kill {
+        let (y, x) = level.coord(mv.from as usize);
+        board.and_not(y, x, BOX);
+        board.expand_sokoban_cloud();
+        if search_mode == SearchMode::DeadlockSearch {
+            update_deadlock_zone(level, board, mv.pull);
+        }
+        return;
+    }
+
+    board.clear_sokoban_inplace();
+    finish_non_kill_move(board, mv, search_mode, level);
+}
+
+/// Copies only the active rows of `src` into `dst` (clearing `SOKOBAN` on the
+/// fly for normal moves) and applies `mv`.
+pub fn apply_move_into(
+    src: &Board,
+    dst: &mut Board,
+    mv: &Move,
+    search_mode: SearchMode,
+    level: &Level,
+) {
+    debug_assert_ne!(search_mode as i32, -1);
+
+    if mv.kill {
+        dst.copy_active_from(src);
+        let (y, x) = level.coord(mv.from as usize);
+        dst.and_not(y, x, BOX);
+        dst.expand_sokoban_cloud();
+        if search_mode == SearchMode::DeadlockSearch {
+            update_deadlock_zone(level, dst, mv.pull);
+        }
+        return;
+    }
+
+    dst.copy_without_sokoban_from(src);
+    finish_non_kill_move(dst, mv, search_mode, level);
 }
 
 #[cfg(test)]
@@ -397,6 +431,16 @@ mod tests {
         .unwrap();
         let mut board = ctx.level.board;
         apply_move(&mut board, &moves[0], SearchMode::Normal, &ctx.level);
+        let mut board_into = Board::new(ctx.level.board.width(), ctx.level.board.height()).unwrap();
+        apply_move_into(
+            &ctx.level.board,
+            &mut board_into,
+            &moves[0],
+            SearchMode::Normal,
+            &ctx.level,
+        );
+        assert_eq!(board_into, board);
+        assert_eq!(board_into.hash(), board.hash());
         let (to_y, to_x) = ctx.level.coord(moves[0].to as usize);
         assert_eq!(board.cell(to_y, to_x) & BOX, BOX);
         let (from_y, from_x) = ctx.level.coord(moves[0].from as usize);

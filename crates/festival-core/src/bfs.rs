@@ -240,31 +240,32 @@ pub fn get_srcs_of_all_targets(level: &Level, board: &Board) -> Board {
 /// Expands a group of cells through free cells, recording distances in `dist`.
 pub fn expand_group(level: &Level, board: &Board, group: &mut Board, dist: &mut [u32]) {
     init_dist(dist, board.width(), board.height());
-    let mut current: Vec<usize> = Vec::with_capacity(MAX_INNER);
-    let mut next: Vec<usize> = Vec::with_capacity(MAX_INNER);
+    let mut buf_a = [0u16; MAX_INNER];
+    let mut buf_b = [0u16; MAX_INNER];
+    let mut current = &mut buf_a[..];
+    let mut next = &mut buf_b[..];
+    let mut current_len = 0usize;
 
     for y in 0..group.height() {
         for x in 0..group.width() {
             if group.cell(y, x) != 0 {
                 if let Some(index) = level.index_at(y, x) {
-                    current.push(index);
+                    current[current_len] = index as u16;
+                    current_len += 1;
                 }
                 dist[flat(y, x)] = 0;
             }
         }
     }
 
-    while !current.is_empty() {
-        next.clear();
-        for &index in &current {
-            let (y, x) = level.coord(index);
+    while current_len > 0 {
+        let mut next_len = 0usize;
+        for &index in &current[..current_len] {
+            let (y, x) = level.coord(index as usize);
+            let next_dist = dist[flat(y, x)] + 1;
             for dir in 0..4 {
-                let ny = y as isize + DELTA_Y[dir];
-                let nx = x as isize + DELTA_X[dir];
-                if ny < 0 || nx < 0 {
-                    continue;
-                }
-                let (ny, nx) = (ny as usize, nx as usize);
+                let ny = y.wrapping_add_signed(DELTA_Y[dir]);
+                let nx = x.wrapping_add_signed(DELTA_X[dir]);
                 if !board.in_bounds(ny, nx) {
                     continue;
                 }
@@ -276,12 +277,14 @@ pub fn expand_group(level: &Level, board: &Board, group: &mut Board, dist: &mut 
                 }
                 group.set(ny, nx, 1);
                 if let Some(next_index) = level.index_at(ny, nx) {
-                    next.push(next_index);
+                    next[next_len] = next_index as u16;
+                    next_len += 1;
                 }
-                dist[flat(ny, nx)] = dist[flat(y, x)] + 1;
+                dist[flat(ny, nx)] = next_dist;
             }
         }
         std::mem::swap(&mut current, &mut next);
+        current_len = next_len;
     }
 }
 

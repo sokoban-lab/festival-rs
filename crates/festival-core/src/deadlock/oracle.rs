@@ -20,7 +20,7 @@ use crate::distance::Distances;
 use crate::error::{Result, SolveError};
 use crate::graph::Graph;
 use crate::level::Level;
-use crate::moves::{Move, apply_move};
+use crate::moves::{Move, apply_move, apply_move_into};
 use crate::search::helper::Helper;
 use crate::solver::LevelContext;
 
@@ -90,10 +90,7 @@ fn cell_is_pushable(cells: &[u8], width: usize, height: usize, y: usize, x: usiz
     (left | right) & OCCUPIED == 0
 }
 
-fn freeze_peel_with_buf(
-    board: &Board,
-    buf: &mut [u8],
-) -> bool {
+fn freeze_peel_with_buf(board: &Board, buf: &mut [u8]) -> bool {
     let height = board.height();
     let width = board.width();
     let len = height * MAX_SIZE;
@@ -271,24 +268,21 @@ pub fn check_all_patterns(
     if !box_touches_unreachable_square(board, box_y, box_x) {
         return false;
     }
-    if pull_mode && board.sokoban_cloud_size() > 4 {
-        return false;
-    }
-
-    let mut b = *board;
-    b.clear_deadlock_zone_inplace();
     let patterns = patterns();
 
     if !pull_mode {
-        return groups_match(&patterns.normal_groups, &b, box_y, box_x);
+        return groups_match(&patterns.normal_groups, board, box_y, box_x);
     }
 
     let (sok_y, sok_x) = level.initial_sokoban;
-    if b.get(sok_y as isize, sok_x as isize) & SOKOBAN != 0 {
+    if board.get(sok_y as isize, sok_x as isize) & SOKOBAN != 0 {
+        return false;
+    }
+    if board.sokoban_cloud_exceeds(4) {
         return false;
     }
 
-    groups_match(&patterns.pull_groups, &b, box_y, box_x)
+    groups_match(&patterns.pull_groups, board, box_y, box_x)
 }
 
 fn has_pull_continuation(ctx: &LevelContext, board: &Board, search_mode: SearchMode) -> bool {
@@ -987,8 +981,8 @@ pub fn move_is_deadlocked(
         return Ok(false);
     }
 
-    let mut c = *board;
-    apply_move(&mut c, mv, SearchMode::Normal, &ctx.level);
+    let mut c = Board::new(board.width(), board.height())?;
+    apply_move_into(board, &mut c, mv, SearchMode::Normal, &ctx.level);
 
     if board_is_deadlocked(ctx, state, &c, pull_mode, search_mode)? {
         return Ok(true);
@@ -1050,10 +1044,12 @@ pub fn check_deadlock_in_moves(
     let mut valid = vec![true; moves.len()];
     let level = &ctx.level;
 
-    let mut b = *board_in;
+    let mut b = Board::new(board_in.width(), board_in.height())?;
+    b.copy_active_from(board_in);
     if pull_mode {
         b.clear_bases_inplace();
     }
+    let mut c = Board::new(board_in.width(), board_in.height())?;
 
     let search_mode = if search_mode == SearchMode::DeadlockSearch {
         SearchMode::Normal
@@ -1115,10 +1111,7 @@ pub fn check_deadlock_in_moves(
         }
 
         let (from_y, from_x) = level.coord(mv.from as usize);
-        if !mv.base
-            && b.cell(from_y, from_x) & BOX != 0
-            && b.cell(dest_y, dest_x) & OCCUPIED == 0
-        {
+        if !mv.base && b.cell(from_y, from_x) & BOX != 0 && b.cell(dest_y, dest_x) & OCCUPIED == 0 {
             b.and_not(from_y, from_x, BOX);
             b.or(dest_y, dest_x, BOX);
             let early_deadlock = state.mpdb.is_deadlock(&b, ctx, pull_mode)
@@ -1131,8 +1124,7 @@ pub fn check_deadlock_in_moves(
             }
         }
 
-        let mut c = b;
-        apply_move(&mut c, mv, search_mode, level);
+        apply_move_into(&b, &mut c, mv, search_mode, level);
 
         if mv.base && state.mpdb.is_deadlock(&c, ctx, pull_mode) {
             valid[i] = false;
@@ -1366,7 +1358,8 @@ mod tests {
                             }
                         }
                         (0..c.height()).any(|i| {
-                            (0..c.width()).any(|j| c.cell(i, j) & BOX != 0 && c.cell(i, j) & TARGET == 0)
+                            (0..c.width())
+                                .any(|j| c.cell(i, j) & BOX != 0 && c.cell(i, j) & TARGET == 0)
                         })
                     }
                 };

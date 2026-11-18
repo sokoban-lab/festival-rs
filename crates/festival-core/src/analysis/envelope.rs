@@ -20,6 +20,7 @@ pub const MAX_ENVELOPE_PATTERNS: usize = 50;
 #[derive(Clone, Debug, Default)]
 pub struct EnvelopePatterns {
     patterns: Vec<Board>,
+    box_indices: Vec<Vec<u16>>,
 }
 
 impl EnvelopePatterns {
@@ -29,6 +30,7 @@ impl EnvelopePatterns {
 
     pub fn clear(&mut self) {
         self.patterns.clear();
+        self.box_indices.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -48,14 +50,51 @@ impl EnvelopePatterns {
         if self.patterns.len() >= MAX_ENVELOPE_PATTERNS {
             return false;
         }
+        let mut boxes = Vec::new();
+        for y in 0..pattern.height() {
+            let row = y * MAX_SIZE;
+            for x in 0..pattern.width() {
+                if pattern.cells()[row + x] & BOX != 0 {
+                    boxes.push((row + x) as u16);
+                }
+            }
+        }
+        self.box_indices.push(boxes);
         self.patterns.push(pattern);
         true
     }
 
+    #[inline]
+    fn matches_indexed(board: &Board, pattern: &Board, boxes: &[u16]) -> bool {
+        debug_assert_eq!(board.width(), pattern.width());
+        debug_assert_eq!(board.height(), pattern.height());
+
+        let b_cells = board.cells();
+        if !boxes
+            .iter()
+            .all(|&idx| b_cells[idx as usize] & OCCUPIED != 0)
+        {
+            return false;
+        }
+
+        let active_len = pattern.height() * MAX_SIZE;
+        let p_cells = pattern.cells();
+        for (&p, &b) in p_cells[..active_len].iter().zip(&b_cells[..active_len]) {
+            if (!p & b) & SOKOBAN != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn fix_boxes_using_envelopes(&self, board: &mut Board) {
-        for pattern in &self.patterns {
-            if matches_envelope_pattern(board, pattern) {
-                wallify_boxes_using_pattern(board, pattern);
+        for (pattern, boxes) in self.patterns.iter().zip(&self.box_indices) {
+            if Self::matches_indexed(board, pattern, boxes) {
+                for &idx in boxes {
+                    let y = idx as usize / MAX_SIZE;
+                    let x = idx as usize % MAX_SIZE;
+                    board.set(y, x, WALL);
+                }
             }
         }
     }
@@ -63,7 +102,8 @@ impl EnvelopePatterns {
     pub fn already_in_envelopes(&self, board: &Board) -> bool {
         self.patterns
             .iter()
-            .any(|pattern| matches_envelope_pattern(board, pattern))
+            .zip(&self.box_indices)
+            .any(|(pattern, boxes)| Self::matches_indexed(board, pattern, boxes))
     }
 }
 

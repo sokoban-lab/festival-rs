@@ -513,40 +513,40 @@ fn expand_corral(
     check_pi_corral(level, distances, &corral_boxes, board_in, cd)
 }
 
-fn touches_two_components(board: &Board, cd: &CorralData) -> Vec<Vec<bool>> {
-    let mut touches = vec![vec![false; MAX_CORRALS_NUM]; MAX_CORRALS_NUM];
+const _: () = assert!(MAX_CORRALS_NUM <= 128);
+
+fn touches_two_components(board: &Board, cd: &CorralData) -> [u128; MAX_CORRALS_NUM] {
+    let mut touches = [0u128; MAX_CORRALS_NUM];
     if cd.corral_comps_num >= MAX_CORRALS_NUM {
         return touches;
     }
 
-    for y in 0..board.height() {
-        for x in 0..board.width() {
-            if board.cell(y, x) & BOX == 0 {
+    let height = board.height();
+    let width = board.width();
+    let cells = board.cells();
+    for y in 0..height {
+        let row = y * MAX_SIZE;
+        for x in 0..width {
+            if cells[row + x] & BOX == 0 {
                 continue;
             }
-            for k in 0..4 {
-                for l in 0..4 {
-                    let d1y = y as isize + DELTA_Y[k];
-                    let d1x = x as isize + DELTA_X[k];
-                    let d2y = y as isize + DELTA_Y[l];
-                    let d2x = x as isize + DELTA_X[l];
-                    if d1y < 0 || d1x < 0 || d2y < 0 || d2x < 0 {
-                        continue;
-                    }
-                    let (d1y, d1x) = (d1y as usize, d1x as usize);
-                    let (d2y, d2x) = (d2y as usize, d2x as usize);
-                    if !board.in_bounds(d1y, d1x) || !board.in_bounds(d2y, d2x) {
-                        continue;
-                    }
-                    let d1 = cd.corral_d[Board::flat_index(d1y, d1x)];
-                    let d2 = cd.corral_d[Board::flat_index(d2y, d2x)];
-                    if d1 != INF
-                        && d2 != INF
-                        && (d1 as usize) < MAX_CORRALS_NUM
-                        && (d2 as usize) < MAX_CORRALS_NUM
-                    {
-                        touches[d1 as usize][d2 as usize] = true;
-                    }
+            let mut comps = [0usize; 4];
+            let mut comp_len = 0usize;
+            for dir in 0..4 {
+                let ny = y.wrapping_add_signed(DELTA_Y[dir]);
+                let nx = x.wrapping_add_signed(DELTA_X[dir]);
+                if ny >= height || nx >= width {
+                    continue;
+                }
+                let d = cd.corral_d[Board::flat_index(ny, nx)];
+                if d != INF && (d as usize) < MAX_CORRALS_NUM {
+                    comps[comp_len] = d as usize;
+                    comp_len += 1;
+                }
+            }
+            for &d1 in &comps[..comp_len] {
+                for &d2 in &comps[..comp_len] {
+                    touches[d1] |= 1u128 << d2;
                 }
             }
         }
@@ -563,8 +563,6 @@ pub fn detect_corral(level: &Level, distances: &Distances, board: &Board) -> Opt
         return None;
     }
 
-    let mut options = *board;
-
     for i in 0..cd.corral_comps_num {
         if !cd.corral_candidates[i] {
             continue;
@@ -573,32 +571,40 @@ pub fn detect_corral(level: &Level, distances: &Distances, board: &Board) -> Opt
             continue;
         }
         if expand_corral(level, distances, board, &mut cd) {
+            let mut options = Board::new(board.width(), board.height()).expect("dims");
+            options.copy_active_from(board);
             set_corral_options(level, distances, board, &mut options, &cd);
             return Some(options);
         }
     }
 
     let touches = touches_two_components(board, &cd);
+    let comp_mask = if cd.corral_comps_num == 0 {
+        0u128
+    } else {
+        (1u128 << cd.corral_comps_num) - 1
+    };
 
-    for (i, row) in touches.iter().enumerate().take(cd.corral_comps_num) {
+    for (i, &row_bits) in touches.iter().enumerate().take(cd.corral_comps_num) {
         if i as u32 == cd.corral_sokoban_comp {
             continue;
         }
-        let remaining = cd.corral_comps_num.saturating_sub(i + 1);
-        for (j, &touch) in row.iter().enumerate().skip(i + 1).take(remaining) {
+        let mut bits = (row_bits & comp_mask) & !((1u128 << (i + 1)) - 1);
+        while bits != 0 {
+            let j = bits.trailing_zeros() as usize;
+            bits &= bits - 1;
             if j as u32 == cd.corral_sokoban_comp {
                 continue;
             }
             if !cd.corral_candidates[j] && !cd.corral_candidates[i] {
                 continue;
             }
-            if !touch {
-                continue;
-            }
             if !init_corral_with_comp(i, j, board, &mut cd) {
                 continue;
             }
             if expand_corral(level, distances, board, &mut cd) {
+                let mut options = Board::new(board.width(), board.height()).expect("dims");
+                options.copy_active_from(board);
                 set_corral_options(level, distances, board, &mut options, &cd);
                 return Some(options);
             }

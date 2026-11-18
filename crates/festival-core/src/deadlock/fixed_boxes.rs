@@ -7,7 +7,7 @@
 use crate::analysis::envelope::EnvelopePatterns;
 use crate::board::Board;
 use crate::constants::*;
-use crate::deadlock::diags::{diag_has_no_targets, mark_diags, wallify_diag};
+use crate::deadlock::diags::{DiagSpan, collect_diags, diag_has_no_targets, wallify_diag};
 use crate::deadlock::direction::deadlock_in_direction;
 use crate::distance::Distances;
 use crate::level::Level;
@@ -140,11 +140,8 @@ pub fn remove_all_pushable_boxes(level: &Level, distances: &Distances, board: &m
     }
 }
 
-/// Retrograde analysis: boxes that cannot be pulled away from the final
-/// position are turned into walls in `board`.
-pub fn fix_crystaline(board: &mut Board) -> bool {
-    let mut final_board = *board;
-    final_board.clear_sokoban_inplace();
+fn fix_crystaline_with_scratch(board: &mut Board, final_board: &mut Board) -> bool {
+    final_board.copy_without_sokoban_from(board);
     final_board.go_to_final_position_with_given_walls();
 
     loop {
@@ -180,19 +177,11 @@ pub fn fix_crystaline(board: &mut Board) -> bool {
 
     let mut fixed_box = false;
     for i in 0..final_board.height() {
+        let row = i * MAX_SIZE;
         for j in 0..final_board.width() {
-            if final_board.cell(i, j) & BOX != 0 && board.cell(i, j) & BOX != 0 {
+            if (final_board.cells()[row + j] & board.cells()[row + j]) & BOX != 0 {
+                board.set(i, j, WALL);
                 fixed_box = true;
-            }
-        }
-    }
-
-    if fixed_box {
-        for i in 0..final_board.height() {
-            for j in 0..final_board.width() {
-                if final_board.cell(i, j) & BOX != 0 && board.cell(i, j) & BOX != 0 {
-                    board.set(i, j, WALL);
-                }
             }
         }
     }
@@ -200,19 +189,27 @@ pub fn fix_crystaline(board: &mut Board) -> bool {
     fixed_box
 }
 
-/// Removes all pushable boxes and turns the remaining ones into walls.
-pub fn turn_immovable_boxes_to_walls(
+/// Retrograde analysis: boxes that cannot be pulled away from the final
+/// position are turned into walls in `board`.
+pub fn fix_crystaline(board: &mut Board) -> bool {
+    let mut final_board = Board::new(board.width(), board.height()).expect("same dims");
+    fix_crystaline_with_scratch(board, &mut final_board)
+}
+
+fn turn_immovable_boxes_to_walls_with_scratch(
     level: &Level,
     distances: &Distances,
     board: &mut Board,
+    remaining: &mut Board,
 ) -> bool {
-    let mut remaining = *board;
-    remove_all_pushable_boxes(level, distances, &mut remaining);
+    remaining.copy_active_from(board);
+    remove_all_pushable_boxes(level, distances, remaining);
 
     let mut changed = false;
     for i in 0..board.height() {
+        let row = i * MAX_SIZE;
         for j in 0..board.width() {
-            if remaining.cell(i, j) & BOX != 0 {
+            if remaining.cells()[row + j] & BOX != 0 {
                 board.set(i, j, WALL);
                 changed = true;
             }
@@ -221,21 +218,30 @@ pub fn turn_immovable_boxes_to_walls(
     changed
 }
 
+/// Removes all pushable boxes and turns the remaining ones into walls.
+pub fn turn_immovable_boxes_to_walls(
+    level: &Level,
+    distances: &Distances,
+    board: &mut Board,
+) -> bool {
+    let mut remaining = Board::new(board.width(), board.height()).expect("same dims");
+    turn_immovable_boxes_to_walls_with_scratch(level, distances, board, &mut remaining)
+}
+
 pub fn fix_diagonals(board: &mut Board) -> bool {
+    let mut spans = [DiagSpan::default(); MAX_INNER];
+    let count = collect_diags(board, &mut spans);
+    if count == 0 {
+        return false;
+    }
+
     let mut changed = false;
-    let (diag_right, diag_left) = mark_diags(board);
-
-    for i in 0..board.height() {
-        for j in 0..board.width() {
-            let n = diag_right.cell(i, j);
-            if n != 0 && diag_has_no_targets(board, i, j, n as usize, true) {
-                changed |= wallify_diag(board, i, j, n as usize, true);
-            }
-
-            let n = diag_left.cell(i, j);
-            if n != 0 && diag_has_no_targets(board, i, j, n as usize, false) {
-                changed |= wallify_diag(board, i, j, n as usize, false);
-            }
+    for span in &spans[..count] {
+        let i = span.y as usize;
+        let j = span.x as usize;
+        let n = span.len as usize;
+        if diag_has_no_targets(board, i, j, n, span.right) {
+            changed |= wallify_diag(board, i, j, n, span.right);
         }
     }
     changed
@@ -248,15 +254,18 @@ pub fn turn_fixed_boxes_into_walls(
     board: &Board,
     envelopes: &EnvelopePatterns,
 ) -> Board {
-    let mut walls = *board;
+    let mut walls = Board::new(board.width(), board.height()).expect("same dims");
+    walls.copy_active_from(board);
     envelopes.fix_boxes_using_envelopes(&mut walls);
 
+    let mut scratch = Board::new(board.width(), board.height()).expect("same dims");
     loop {
         let mut changed = turn_2x2_to_walls(&mut walls);
         changed |= close_holes(&mut walls);
-        changed |= turn_immovable_boxes_to_walls(level, distances, &mut walls);
+        changed |=
+            turn_immovable_boxes_to_walls_with_scratch(level, distances, &mut walls, &mut scratch);
         changed |= fix_diagonals(&mut walls);
-        changed |= fix_crystaline(&mut walls);
+        changed |= fix_crystaline_with_scratch(&mut walls, &mut scratch);
         if !changed {
             break;
         }
@@ -282,15 +291,45 @@ pub fn is_box_2x2_frozen_at_index(level: &Level, board: &Board, index: usize) ->
     false
 }
 
+#[inline]
+fn is_occupied_after_move(
+    board: &Board,
+    y: isize,
+    x: isize,
+    from_y: isize,
+    from_x: isize,
+    to_y: isize,
+    to_x: isize,
+) -> bool {
+    if y == to_y && x == to_x {
+        return true;
+    }
+    let mut cell = board.get(y, x);
+    if y == from_y && x == from_x {
+        cell &= !BOX;
+    }
+    cell & OCCUPIED != 0
+}
+
 pub fn is_box_2x2_frozen_after_move(level: &Level, board: &Board, m: &Move) -> bool {
     let (from_y, from_x) = level.coord(m.from as usize);
     let (to_y, to_x) = level.coord(m.to as usize);
     debug_assert!(board.cell(from_y, from_x) & BOX != 0, "missing box");
 
-    let mut moved = *board;
-    moved.and_not(from_y, from_x, BOX);
-    moved.or(to_y, to_x, BOX);
-    is_box_2x2_frozen_at_index(level, &moved, m.to as usize)
+    let (fy, fx) = (from_y as isize, from_x as isize);
+    let (ty, tx) = (to_y as isize, to_x as isize);
+    for a in ty - 1..=ty {
+        for b in tx - 1..=tx {
+            if is_occupied_after_move(board, a, b, fy, fx, ty, tx)
+                && is_occupied_after_move(board, a, b + 1, fy, fx, ty, tx)
+                && is_occupied_after_move(board, a + 1, b, fy, fx, ty, tx)
+                && is_occupied_after_move(board, a + 1, b + 1, fy, fx, ty, tx)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -349,6 +388,57 @@ mod tests {
         }
         let index = lvl.index_at(1, 2).unwrap();
         assert!(is_box_2x2_frozen_at_index(&lvl, &b, index));
+    }
+
+    #[test]
+    fn frozen_after_move_matches_board_copy() {
+        let lvl = level("#######\n#@    #\n#     #\n#     #\n#  .  #\n#######\n");
+        let mut b = lvl.board;
+        for (y, x) in [(2, 2), (2, 3), (3, 2), (3, 4)] {
+            b.set(y, x, BOX);
+        }
+        let from_ok = lvl.index_at(3, 4).unwrap() as u16;
+        let to_frozen = lvl.index_at(3, 3).unwrap() as u16;
+        let to_open = lvl.index_at(2, 4).unwrap() as u16;
+        let mv_frozen = Move {
+            from: from_ok,
+            to: to_frozen,
+            ..Move::default()
+        };
+        let mv_open = Move {
+            from: from_ok,
+            to: to_open,
+            ..Move::default()
+        };
+        assert!(is_box_2x2_frozen_after_move(&lvl, &b, &mv_frozen));
+        assert!(!is_box_2x2_frozen_after_move(&lvl, &b, &mv_open));
+
+        // Exhaustively compare against reference board copy on every valid (from, to) pair.
+        for from in 0..lvl.index_num() {
+            let (fy, fx) = lvl.coord(from);
+            if b.cell(fy, fx) & BOX == 0 {
+                continue;
+            }
+            for to in 0..lvl.index_num() {
+                if to == from {
+                    continue;
+                }
+                let (ty, tx) = lvl.coord(to);
+                if b.cell(ty, tx) & OCCUPIED != 0 {
+                    continue;
+                }
+                let mv = Move {
+                    from: from as u16,
+                    to: to as u16,
+                    ..Move::default()
+                };
+                let mut moved = b;
+                moved.and_not(fy, fx, BOX);
+                moved.or(ty, tx, BOX);
+                let expected = is_box_2x2_frozen_at_index(&lvl, &moved, to);
+                assert_eq!(is_box_2x2_frozen_after_move(&lvl, &b, &mv), expected);
+            }
+        }
     }
 
     #[test]

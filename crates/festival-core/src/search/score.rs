@@ -169,13 +169,16 @@ pub fn is_better_score(
 
 /// Sum of the per-cell scored distance for every box (`get_scored_distance`).
 pub fn get_scored_distance(helper: &Helper, board: &Board) -> i32 {
+    let cells = board.cells();
+    let dist = &helper.scored_distance;
+    let width = board.width();
     let mut sum = 0i32;
     for y in 0..board.height() {
-        for x in 0..board.width() {
-            if board.cell(y, x) & crate::constants::BOX == 0 {
-                continue;
+        let row = y * crate::constants::MAX_SIZE;
+        for (&cell, &d) in cells[row..row + width].iter().zip(&dist[row..row + width]) {
+            if cell & crate::constants::BOX != 0 {
+                sum += d as i32;
             }
-            sum += helper.scored_distance[Board::flat_index(y, x)] as i32;
         }
     }
     sum
@@ -210,9 +213,10 @@ pub fn score_board(
         return score;
     }
 
-    score.boxes_on_targets = board.boxes_on_targets() as i16;
+    let (boxes_in_level, boxes_on_targets) = board.box_counts();
+    score.boxes_on_targets = boxes_on_targets as i16;
     score.connectivity = crate::bfs::get_connectivity(level, board) as i16;
-    score.boxes_in_level = board.boxes_in_level() as i16;
+    score.boxes_in_level = boxes_in_level as i16;
 
     match search_mode {
         SearchMode::KDistSearch | SearchMode::XySearch | SearchMode::MiniSearch => {
@@ -234,11 +238,9 @@ pub fn score_board(
             return score;
         }
         SearchMode::WobblersSearch | SearchMode::RoomsDeadlockSearch => {
-            score.boxes_on_targets = if pull_mode {
-                board.boxes_on_bases(&level.initial) as i16
-            } else {
-                board.boxes_on_targets() as i16
-            };
+            if pull_mode {
+                score.boxes_on_targets = board.boxes_on_bases(&level.initial) as i16;
+            }
             return score;
         }
         SearchMode::GirlSearch => {

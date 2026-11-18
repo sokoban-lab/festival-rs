@@ -7,12 +7,25 @@ use crate::error::{Result, SolveError};
 /// the first `height` rows / `width` columns. `get` reproduces that layout by
 /// returning `0` outside the logical rectangle, so callers can keep the same
 /// neighbor arithmetic without panicking.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct Board {
     width: usize,
     height: usize,
     cells: [u8; MAX_INNER],
 }
+
+impl PartialEq for Board {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        if self.width != other.width || self.height != other.height {
+            return false;
+        }
+        let active_len = self.height * MAX_SIZE;
+        self.cells[..active_len] == other.cells[..active_len]
+    }
+}
+
+impl Eq for Board {}
 
 impl std::fmt::Debug for Board {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,111 +153,141 @@ impl Board {
         self.cells[..self.height * MAX_SIZE].fill(0);
     }
 
+    #[inline]
+    pub fn copy_active_from(&mut self, src: &Self) {
+        let old_len = self.height * MAX_SIZE;
+        let new_len = src.height * MAX_SIZE;
+        self.width = src.width;
+        self.height = src.height;
+        self.cells[..new_len].copy_from_slice(&src.cells[..new_len]);
+        if old_len > new_len {
+            self.cells[new_len..old_len].fill(0);
+        }
+    }
+
+    #[inline]
+    pub fn copy_without_sokoban_from(&mut self, src: &Self) {
+        let old_len = self.height * MAX_SIZE;
+        let new_len = src.height * MAX_SIZE;
+        self.width = src.width;
+        self.height = src.height;
+        for (dst, &cell) in self.cells[..new_len].iter_mut().zip(&src.cells[..new_len]) {
+            *dst = cell & !SOKOBAN;
+        }
+        if old_len > new_len {
+            self.cells[new_len..old_len].fill(0);
+        }
+    }
+
     pub fn copy_board(&self) -> Self {
         *self
     }
 
     pub fn without_boxes(&self) -> Self {
-        let mut board = *self;
-        board.clear_boxes_inplace();
+        let mut board = Self {
+            width: self.width,
+            height: self.height,
+            cells: [0; MAX_INNER],
+        };
+        let active_len = self.height * MAX_SIZE;
+        for (dst, &cell) in board.cells[..active_len]
+            .iter_mut()
+            .zip(&self.cells[..active_len])
+        {
+            *dst = cell & !BOX;
+        }
         board
     }
 
     pub fn clear_boxes_inplace(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.cells[y * MAX_SIZE + x] &= !BOX;
-            }
+        for cell in &mut self.cells[..self.height * MAX_SIZE] {
+            *cell &= !BOX;
         }
     }
 
     pub fn clear_sokoban_inplace(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.cells[y * MAX_SIZE + x] &= !SOKOBAN;
-            }
+        for cell in &mut self.cells[..self.height * MAX_SIZE] {
+            *cell &= !SOKOBAN;
         }
     }
 
     pub fn clear_targets_inplace(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.cells[y * MAX_SIZE + x] &= !TARGET;
-            }
+        for cell in &mut self.cells[..self.height * MAX_SIZE] {
+            *cell &= !TARGET;
         }
     }
 
     pub fn clear_bases_inplace(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.cells[y * MAX_SIZE + x] &= !BASE;
-            }
+        for cell in &mut self.cells[..self.height * MAX_SIZE] {
+            *cell &= !BASE;
         }
     }
 
     pub fn clear_deadlock_zone_inplace(&mut self) {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                self.cells[y * MAX_SIZE + x] &= !DEADLOCK_ZONE;
-            }
+        for cell in &mut self.cells[..self.height * MAX_SIZE] {
+            *cell &= !DEADLOCK_ZONE;
         }
     }
 
     pub fn contains_boxes(&self) -> bool {
-        (0..self.height).any(|y| (0..self.width).any(|x| self.cell(y, x) & BOX != 0))
+        self.cells[..self.height * MAX_SIZE]
+            .iter()
+            .any(|&cell| cell & BOX != 0)
+    }
+
+    #[inline]
+    pub fn box_counts(&self) -> (usize, usize) {
+        let mut boxes = 0usize;
+        let mut on_targets = 0usize;
+        for &cell in &self.cells[..self.height * MAX_SIZE] {
+            boxes += usize::from(cell & BOX != 0);
+            on_targets += usize::from((cell & !BASE) == PACKED_BOX);
+        }
+        (boxes, on_targets)
     }
 
     pub fn boxes_in_level(&self) -> usize {
-        let mut sum = 0;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.cell(y, x) & BOX != 0 {
-                    sum += 1;
-                }
-            }
-        }
-        sum
+        self.cells[..self.height * MAX_SIZE]
+            .iter()
+            .map(|&cell| usize::from(cell & BOX != 0))
+            .sum()
     }
 
     pub fn boxes_on_targets(&self) -> usize {
-        let mut sum = 0;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if (self.cell(y, x) & !BASE) == PACKED_BOX {
-                    sum += 1;
-                }
-            }
-        }
-        sum
+        self.cells[..self.height * MAX_SIZE]
+            .iter()
+            .map(|&cell| usize::from((cell & !BASE) == PACKED_BOX))
+            .sum()
     }
 
     pub fn boxes_on_bases(&self, initial: &Board) -> usize {
-        let mut sum = 0;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.cell(y, x) & BOX == 0 {
-                    continue;
-                }
-                if initial.cell(y, x) & BOX != 0 {
-                    sum += 1;
-                }
+        let active_len = self.height * MAX_SIZE;
+        let mut sum = 0usize;
+        for (&cell, &init_cell) in self.cells[..active_len]
+            .iter()
+            .zip(&initial.cells[..active_len])
+        {
+            if (cell & init_cell) & BOX != 0 {
+                sum += 1;
             }
         }
         sum
     }
 
     pub fn all_boxes_in_place(&self, pull_mode: bool, initial: &Board) -> bool {
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let cell = self.cell(y, x);
-                if cell & BOX == 0 {
-                    continue;
+        let active_len = self.height * MAX_SIZE;
+        if pull_mode {
+            for (&cell, &init_cell) in self.cells[..active_len]
+                .iter()
+                .zip(&initial.cells[..active_len])
+            {
+                if cell & BOX != 0 && init_cell & BOX == 0 {
+                    return false;
                 }
-                if pull_mode {
-                    if initial.cell(y, x) & BOX == 0 {
-                        return false;
-                    }
-                } else if cell & TARGET == 0 {
+            }
+        } else {
+            for &cell in &self.cells[..active_len] {
+                if cell & (BOX | TARGET) == BOX {
                     return false;
                 }
             }
@@ -290,15 +333,23 @@ impl Board {
     }
 
     pub fn sokoban_cloud_size(&self) -> usize {
-        let mut sum = 0;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                if self.cell(y, x) & SOKOBAN != 0 {
-                    sum += 1;
+        self.cells[..self.height * MAX_SIZE]
+            .iter()
+            .map(|&cell| usize::from(cell & SOKOBAN != 0))
+            .sum()
+    }
+
+    pub fn sokoban_cloud_exceeds(&self, limit: usize) -> bool {
+        let mut sum = 0usize;
+        for &cell in &self.cells[..self.height * MAX_SIZE] {
+            if cell & SOKOBAN != 0 {
+                sum += 1;
+                if sum > limit {
+                    return true;
                 }
             }
         }
-        sum
+        false
     }
 
     fn expand_sokoban_queue(&mut self, queue: &mut [u16], mut tail: usize) {
@@ -518,11 +569,13 @@ impl Board {
     /// Exact 64-bit hash used by the C++ solver.
     pub fn hash(&self) -> u64 {
         let mut hash: u64 = 1;
+        let width = self.width;
         for y in 0..self.height {
-            for x in 0..self.width {
+            let row = y * MAX_SIZE;
+            for &cell in &self.cells[row..row + width] {
                 hash = hash
                     .wrapping_mul(12_345)
-                    .wrapping_add(self.cell(y, x) as u64)
+                    .wrapping_add(cell as u64)
                     .wrapping_add(hash >> 32);
             }
         }
@@ -532,9 +585,8 @@ impl Board {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut data = Vec::with_capacity(self.width * self.height);
         for y in 0..self.height {
-            for x in 0..self.width {
-                data.push(self.cell(y, x));
-            }
+            let row = y * MAX_SIZE;
+            data.extend_from_slice(&self.cells[row..row + self.width]);
         }
         data
     }
@@ -545,11 +597,38 @@ impl Board {
         }
         let mut board = Self::new(width, height)?;
         for y in 0..height {
-            for x in 0..width {
-                board.set(y, x, data[y * width + x]);
-            }
+            let dst = y * MAX_SIZE;
+            let src = y * width;
+            board.cells[dst..dst + width].copy_from_slice(&data[src..src + width]);
         }
         Ok(board)
+    }
+
+    #[inline]
+    pub fn load_from_bytes(&mut self, width: usize, height: usize, data: &[u8]) -> Result<()> {
+        if width == 0 || height == 0 || width > MAX_SIZE || height > MAX_SIZE {
+            return Err(SolveError::SizeTooBig);
+        }
+        if data.len() != width * height {
+            return Err(SolveError::Internal("board byte length mismatch".into()));
+        }
+        let old_len = self.height * MAX_SIZE;
+        let new_len = height * MAX_SIZE;
+        let width_shrank = width < self.width;
+        self.width = width;
+        self.height = height;
+        for y in 0..height {
+            let dst = y * MAX_SIZE;
+            let src = y * width;
+            self.cells[dst..dst + width].copy_from_slice(&data[src..src + width]);
+            if width_shrank {
+                self.cells[dst + width..dst + MAX_SIZE].fill(0);
+            }
+        }
+        if old_len > new_len {
+            self.cells[new_len..old_len].fill(0);
+        }
+        Ok(())
     }
 
     /// Serialization used by `solutions.sok` (`save_board_to_file`).
