@@ -7,16 +7,99 @@
 
 | 版本  |       日期 |      提交 | Microban 单核 | Microban 8 核 | XSokoban 单核 |   峰值 RSS |
 | ----- | ---------: | --------: | ------------: | ------------: | ------------: | ---------: |
+| 0.1.5 | 2026-11-18 | `90c1d21` |         0.190 |         0.027 |         0.511 | 0.44–0.68× |
 | 0.1.3 | 2026-11-02 | `00860ac` |         0.245 |         0.106 |         0.540 | 0.30–0.36× |
 | 0.1.2 | 2026-10-29 | `5a504f5` |         0.361 |         0.105 |         0.559 | 0.30–0.38× |
 | 0.1.1 | 2026-10-29 | `d1840cd` |         0.443 |         0.127 |         0.563 | 0.30–0.38× |
 | 0.1.0 | 2026-10-29 | `e530e92` |         0.532 |         0.143 |         0.909 | 0.32–0.39× |
 
 单核为 600 秒/关批量结果；8 核为 60 秒/关最好值（0.1.2 跑了两组共六次，0.1.3
-跑了一组三次）。峰值 RSS 一列为同一版本内各项的比值范围：Microban 单核 / 8 核、
+跑了一组三次，0.1.5 跑了一组三次）。峰值 RSS 一列为同一版本内各项的比值范围：Microban 单核 / 8 核、
 XSokoban 批量与单关峰值。
 
 不同会话的绝对耗时有漂移，表中比值均取自同一次会话的配对运行。
+
+## 0.1.5
+
+### 环境
+
+| 项目           | 值                                                                                               |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| 日期           | 2026-11-18                                                                                       |
+| 提交           | `90c1d21` + 版本号 0.1.5（提交前的工作树）                                                        |
+| 系统           | Windows 11 Pro 10.0.26300                                                                        |
+| CPU / 内存     | Intel Core i9-14900HX（8 P-core + 16 E-core，32 逻辑核）/ 32 GB                                  |
+| Rust           | rustc 1.100.0；thin LTO、`codegen-units = 1`、`panic = "abort"`、mimalloc                        |
+| C++            | clang++ 23.1.4，`-O3 -DTHREADS`，Festival 3.1 `f7c0231`                                          |
+| 二进制 SHA-256 | Rust `1619b6a6…`；C++ `16f46d56…`（与 0.1.0–0.1.3 相同）                                         |
+| 关卡集         | Microban I 155 关 `7077dba0…`；XSokoban 3.3c 90 关 `0c6fe8d1…`                                   |
+
+### 测量方法
+
+与 0.1.3 相同：单核 600 秒/关、默认八策略、固定 CPU 0、两轮交换求解器先后；8 核仅 Microban、60 秒/关、一组三次；内存为整批进程峰值工作集；所有解用 `festival-bench verify-solutions` 回放。
+
+0.1.5 相对 0.1.3 的主要变化是落地了五项渐进优化（P0–P3-A，详见 [`docs/optimization.md`](optimization.md)）：
+1. **P0（Lock-free perimeter）**：周边搜索前沿锁由互斥锁升级为 `parking_lot::RwLock` 与原子计数。
+2. **P1（Deadlock cache 16B & shared verdicts）**：死锁缓存节点紧凑化至 16 字节，并跨核心广播非死锁最终结论。
+3. **P1.5（Early cancellation broadcast & strategy stealing）**：一旦任一策略找到解，立即广播全局取消标志，避免多核死等，并支持空闲线程动态偷取备选策略。
+4. **P2（Row-range sliced active board）**：按活跃推箱行动态缩减 board 迭代切片，消除空行开销。
+5. **P3-A（Incremental board reachable & fast move-gen）**：推箱步后增量更新连通区域与单箱可达性，大幅缩减 DFS 广搜开销。
+
+### Microban I（155 关）
+
+| 指标               |    festival-rs |               C++ |         Rust / C++ |
+| ------------------ | -------------: | ----------------: | -----------------: |
+| 解出               |        155/155 |           155/155 |                  — |
+| 单核总耗时（两轮） |  4.669–4.750 s |  24.569–25.092 s |       0.189–0.190 |
+| 单核总耗时（最好比值） |     4.669 s |          24.569 s |         **0.190** |
+| 8 核总耗时（三次） |  3.547–4.870 s | 118.416–133.681 s |       0.027–0.041 |
+| 8 核总耗时（最好比值） |     3.547 s |         133.681 s |         **0.027** |
+| 步数 / 推动        | 22,284 / 5,924 |    22,460 / 5,912 | 99.22% / 100.20% |
+| 峰值工作集（单核） |       501.5 MB |          736.1 MB |              0.681 |
+| 峰值工作集（8 核） |     3,468.6 MB |        5,688.6 MB |              0.610 |
+| 解回放             |        155/155 |           155/155 |                  — |
+
+Microban 单核比值由 0.1.3 的 0.245 进一步降低至 0.190（Rust 4.669 s vs C++ 24.569 s，提速达 5.26 倍）。解的质量保持完全一致（22,284 / 5,924，全部通过回放校验）。
+8 核最好比值由 0.1.3 的 0.106 降至 0.027（Rust 3.547 s vs C++ 133.681 s），得益于早期解取消广播与工作窃取，避免了多核心在简单关卡上的线程竞争与死等。
+
+### XSokoban（90 关）
+
+| 指标                             |       festival-rs |               C++ |    Rust / C++ |
+| -------------------------------- | ----------------: | ----------------: | ------------: |
+| 解出                             |             90/90 |             90/90 |             — |
+| 单核总耗时（两轮）               | 113.975–118.962 s | 208.471–223.050 s |   0.511–0.571 |
+| 单核总耗时（最好比值）           |         113.975 s |         223.050 s |     **0.511** |
+| 步数 / 推动                      |   93,723 / 28,639 |   94,245 / 28,709 | 99.45% / 99.76% |
+| 峰值工作集（批量）               |          369.9 MB |          851.3 MB |         0.435 |
+| 峰值工作集（单关最大，第 29 关） |          393.3 MB |          832.5 MB |         0.472 |
+| 解回放                           |             90/90 |             90/90 |             — |
+
+XSokoban 单核比值由 0.1.3 的 0.540 优化至 0.511（Rust 113.975 s vs C++ 223.050 s，约 1.96 倍提速）。解的步数/推动数完全一致（93,723 / 28,639），全部回放通过。整批峰值 RSS Rust 仅 369.9 MB，相当于 C++ 的 43.5%；单关最大（第 29 关）峰值 RSS 393.3 MB，相当于 C++ 的 47.2%。
+
+### 复现
+
+```sh
+cargo build --release -p festival-cli -p festival-bench
+scripts/build_cpp_ref.sh
+sha256sum -c levels/corpus/microban.xsb.sha256
+sha256sum -c levels/corpus/xsokoban.sok.sha256
+
+# 单核批量固定 CPU 0，两轮交换先后
+mkdir -p out/015/mb-r1-rust out/015/mb-r1-cpp out/015/xs-r1-rust out/015/xs-r1-cpp
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --timeout 600 --threads 1 --output-dir out/015/mb-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 600 -cores 1 -out_dir out/015/mb-r1-cpp"
+cmd //c "start /affinity 1 /wait /b target/release/festival-rs.exe levels/corpus/xsokoban.sok --level all --timeout 600 --threads 1 --output-dir out/015/xs-r1-rust"
+cmd //c "start /affinity 1 /wait /b target/festival-cpp.exe levels/corpus/xsokoban.sok -from 1 -to 90 -time 600 -cores 1 -out_dir out/015/xs-r1-cpp"
+
+# 8 核 Microban（一组三次）
+mkdir -p out/015/mb-8c-r1-rust out/015/mb-8c-r1-cpp
+cmd //c "start /wait /b target/release/festival-rs.exe levels/corpus/microban.xsb --level all --timeout 60 --threads 8 --output-dir out/015/mb-8c-r1-rust"
+cmd //c "start /wait /b target/festival-cpp.exe levels/corpus/microban.xsb -from 1 -to 155 -time 60 -cores 8 -out_dir out/015/mb-8c-r1-cpp"
+
+# 解回放校验
+target/release/festival-bench.exe verify-solutions levels/corpus/microban.xsb out/015/mb-r1-rust/solutions.sok
+target/release/festival-bench.exe verify-solutions levels/corpus/xsokoban.sok out/015/xs-r1-rust/solutions.sok
+```
 
 ## 0.1.3
 
