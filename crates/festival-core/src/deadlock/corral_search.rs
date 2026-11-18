@@ -476,10 +476,8 @@ pub(crate) fn corral_deadlock_prepared(
         return Ok(false);
     }
 
-    #[allow(clippy::useless_vec)]
-    let mut checked = vec![vec![false; MAX_SIZE]; MAX_SIZE];
-    #[allow(clippy::useless_vec)]
-    let mut search_exceeded = vec![false; MAX_SIZE];
+    let mut checked = [0u64; MAX_SIZE];
+    let mut search_exceeded = [false; MAX_SIZE];
 
     let Some((sok_y, sok_x)) = b.sokoban_position() else {
         return Ok(false);
@@ -490,7 +488,7 @@ pub(crate) fn corral_deadlock_prepared(
         if c1 as u32 == sokoban_comp {
             continue;
         }
-        checked[c1][c1] = true;
+        checked[c1] |= 1u64 << c1;
         let mut c = b;
         keep_two_components(ctx, &mut c, &dist, c1 as u32, c1 as u32, false);
         clear_boxes_out_of_deadlock_zone(&mut c);
@@ -527,11 +525,14 @@ pub(crate) fn corral_deadlock_prepared(
                     if c1 as u32 == sokoban_comp || c2 as u32 == sokoban_comp {
                         continue;
                     }
-                    if checked[c1][c2] || search_exceeded[c1] || search_exceeded[c2] {
+                    if (checked[c1] & (1u64 << c2)) != 0
+                        || search_exceeded[c1]
+                        || search_exceeded[c2]
+                    {
                         continue;
                     }
-                    checked[c1][c2] = true;
-                    checked[c2][c1] = true;
+                    checked[c1] |= 1u64 << c2;
+                    checked[c2] |= 1u64 << c1;
 
                     let mut c = b;
                     keep_two_components(ctx, &mut c, &dist, c1 as u32, c2 as u32, false);

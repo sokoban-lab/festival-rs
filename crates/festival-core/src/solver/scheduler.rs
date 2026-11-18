@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::deadlock::cache::SharedDeadlockCache;
 use crate::error::{Result, SolveError};
 use crate::search::helper::Helper;
 use crate::search::perimeter::Perimeter;
@@ -205,6 +206,7 @@ fn worker_state(ctx: &LevelContext, log_max_nodes: u32) -> Result<WorkerState> {
 #[derive(Default)]
 pub struct Solver {
     workers: Vec<WorkerState>,
+    shared_deadlock_cache: Option<Arc<SharedDeadlockCache>>,
     log_max_nodes: u32,
 }
 
@@ -219,18 +221,39 @@ impl Solver {
             self.workers.clear();
             self.log_max_nodes = config.log_max_nodes;
         }
+        for worker in &mut self.workers {
+            worker.tree.deadlock.shared_cache = None;
+        }
+        let shared_cache = if config.cores > 1 && config.forced_alg.is_none() {
+            let mut arc = self
+                .shared_deadlock_cache
+                .take()
+                .unwrap_or_else(|| Arc::new(SharedDeadlockCache::new()));
+            if let Some(cache) = Arc::get_mut(&mut arc) {
+                cache.reset_for_new_level();
+            } else {
+                arc = Arc::new(SharedDeadlockCache::new());
+            }
+            self.shared_deadlock_cache = Some(Arc::clone(&arc));
+            Some(arc)
+        } else {
+            None
+        };
         let mut prepared = Vec::with_capacity(config.cores);
         let mut reused = std::mem::take(&mut self.workers).into_iter();
         for index in 0..config.cores {
             let log_max_nodes = worker_log_max_nodes(config, index);
             if let Some(mut worker) = reused.next() {
                 if worker.tree.prepare_for_level(log_max_nodes, ctx)? {
+                    worker.tree.deadlock.shared_cache = shared_cache.clone();
                     worker.helper.reset();
                     prepared.push(worker);
                     continue;
                 }
             }
-            prepared.push(worker_state(ctx, log_max_nodes)?);
+            let mut worker = worker_state(ctx, log_max_nodes)?;
+            worker.tree.deadlock.shared_cache = shared_cache.clone();
+            prepared.push(worker);
         }
         self.workers = prepared;
         Ok(())

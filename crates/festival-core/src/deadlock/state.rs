@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::analysis::EnvelopePatterns;
 use crate::analysis::hungarian::HungarianCache;
 use crate::board::Board;
-use crate::deadlock::cache::DeadlockCache;
+use crate::deadlock::cache::{DeadlockCache, SharedDeadlockCache};
 use crate::deadlock::k_dist::KDistHash;
 use crate::deadlock::mpdb::Mpdb;
 use crate::deadlock::positions::PositionSet;
@@ -29,6 +29,7 @@ pub struct RoomsDeadlockData {
 
 pub struct DeadlockState {
     pub cache: DeadlockCache,
+    pub shared_cache: Option<Arc<SharedDeadlockCache>>,
     pub hungarian_cache: HungarianCache,
     pub mpdb: Arc<Mpdb>,
     pub k_dist: KDistHash,
@@ -57,6 +58,7 @@ impl DeadlockState {
     pub fn new(cache_log_size: u32) -> Self {
         Self {
             cache: DeadlockCache::new(cache_log_size),
+            shared_cache: None,
             hungarian_cache: HungarianCache::new(),
             mpdb: Arc::new(Mpdb::default()),
             k_dist: KDistHash::new(crate::constants::MAX_SIZE, crate::constants::MAX_SIZE),
@@ -116,12 +118,29 @@ impl DeadlockState {
         pull_mode: bool,
         alg: crate::constants::SearchMode,
     ) -> Option<i8> {
-        let result = self.cache.get(hash, pull_mode, alg)?;
-        if self.cache_enabled || result == crate::deadlock::SEARCH_EXCEEDED {
-            Some(result)
-        } else {
-            None
+        if let Some(result) = self.cache.get(hash, pull_mode, alg) {
+            if self.cache_enabled {
+                if result == crate::deadlock::SEARCH_EXCEEDED {
+                    if let Some(shared) = &self.shared_cache {
+                        if let Some(verdict) = shared.get(hash, pull_mode, alg) {
+                            return Some(verdict);
+                        }
+                    }
+                }
+                return Some(result);
+            }
+            return if result == crate::deadlock::SEARCH_EXCEEDED {
+                Some(result)
+            } else {
+                None
+            };
         }
+        if self.cache_enabled {
+            if let Some(shared) = &self.shared_cache {
+                return shared.get(hash, pull_mode, alg);
+            }
+        }
+        None
     }
 
     /// Unfiltered lookup for callers that own the cache-driven bookkeeping
@@ -132,7 +151,20 @@ impl DeadlockState {
         pull_mode: bool,
         alg: crate::constants::SearchMode,
     ) -> Option<i8> {
-        self.cache.get(hash, pull_mode, alg)
+        let local = self.cache.get(hash, pull_mode, alg);
+        if self.cache_enabled
+            && !matches!(
+                local,
+                Some(crate::deadlock::IS_DEADLOCK | crate::deadlock::NOT_DEADLOCK)
+            )
+        {
+            if let Some(shared) = &self.shared_cache {
+                if let Some(verdict) = shared.get(hash, pull_mode, alg) {
+                    return Some(verdict);
+                }
+            }
+        }
+        local
     }
 
     pub fn cache_insert(
@@ -146,6 +178,14 @@ impl DeadlockState {
             return;
         }
         self.cache.insert(hash, result, pull_mode, alg);
+        if matches!(
+            result,
+            crate::deadlock::IS_DEADLOCK | crate::deadlock::NOT_DEADLOCK
+        ) {
+            if let Some(shared) = &self.shared_cache {
+                shared.insert(hash, result, pull_mode, alg);
+            }
+        }
     }
 
     pub fn cache_queries(
